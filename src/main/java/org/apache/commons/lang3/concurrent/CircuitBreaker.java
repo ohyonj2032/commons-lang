@@ -77,6 +77,17 @@ public interface CircuitBreaker<T> {
     boolean isClosed();
 
     /**
+     * Tests the current half-open state of this circuit breaker. A return value of
+     * <strong>true</strong> means that the circuit breaker is currently in half-open
+     * state, indicating that it is probing the monitored subsystem to check if it has
+     * recovered.
+     *
+     * @return the current half-open state of this circuit breaker.
+     * @since 4.5
+     */
+    boolean isHalfOpen();
+
+    /**
      * Tests the current open state of this circuit breaker. A return value of
      * <strong>true</strong> means that the circuit breaker is currently open indicating a
      * problem in the monitored subsystem.
@@ -91,4 +102,17 @@ public interface CircuitBreaker<T> {
      * available. If this circuit breaker is already open, this method has no effect.
      */
     void open();
+
+    /**
+     * Attempts to probe the monitored subsystem when the circuit breaker is in half-open
+     * state. This method ensures that only a single probe request is allowed through at
+     * a time. If the probe succeeds, the circuit breaker transitions to closed state.
+     * If the probe fails, it transitions back to open state.
+     *
+     * @return <strong>true</strong> if this thread was granted permission to probe;
+     * <strong>false</strong> if another probe is already in progress or the circuit
+     * breaker is not in half-open state.
+     * @since 4.5
+     */
+    boolean tryProbe();
 }

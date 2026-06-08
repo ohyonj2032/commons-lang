@@ -56,6 +56,30 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
             public State oppositeState() {
                 return CLOSED;
             }
+        },
+
+        /** The half-open state. */
+        HALF_OPEN {
+
+            /**
+             * {@inheritDoc}
+             */
+            @Override
+            public State oppositeState() {
+                return OPEN;
+            }
+        },
+
+        /** The probing state - a probe request is in progress. */
+        PROBING {
+
+            /**
+             * {@inheritDoc}
+             */
+            @Override
+            public State oppositeState() {
+                return OPEN;
+            }
         };
 
         /**
@@ -114,9 +138,14 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * @param newState the new state to be set
      */
     protected void changeState(final State newState) {
-        if (state.compareAndSet(newState.oppositeState(), newState)) {
-            changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
-        }
+        final State currentState;
+        do {
+            currentState = state.get();
+            if (currentState == newState) {
+                return;
+            }
+        } while (!state.compareAndSet(currentState, newState));
+        changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
     }
 
     /**
@@ -144,7 +173,16 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     @Override
     public boolean isClosed() {
-        return !isOpen();
+        return state.get() == State.CLOSED;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean isHalfOpen() {
+        final State current = state.get();
+        return current == State.HALF_OPEN || current == State.PROBING;
     }
 
     /**
@@ -170,6 +208,14 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     public void removeChangeListener(final PropertyChangeListener listener) {
         changeSupport.removePropertyChangeListener(listener);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean tryProbe() {
+        return state.compareAndSet(State.HALF_OPEN, State.PROBING);
     }
 
 }
