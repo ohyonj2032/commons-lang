@@ -1,0 +1,119 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..753e9b82d 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -119,11 +119,17 @@ protected void changeState(final State newState) {
+         }
+     }
+ 
++    protected boolean checkState(final State currentState) {
++        return !isOpen(currentState);
++    }
++
+     /**
+      * {@inheritDoc}
+      */
+     @Override
+-    public abstract boolean checkState();
++    public boolean checkState() {
++        return checkState(state.get());
++    }
+ 
+     /**
+      * {@inheritDoc}
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..c3d977b95 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -77,14 +77,6 @@ public ThresholdCircuitBreaker(final long threshold) {
+         this.threshold = threshold;
+     }
+ 
+-    /**
+-     * {@inheritDoc}
+-     */
+-    @Override
+-    public boolean checkState() {
+-        return !isOpen();
+-    }
+-
+     /**
+      * {@inheritDoc}
+      *
+@@ -93,7 +85,7 @@ public boolean checkState() {
+     @Override
+     public void close() {
+         super.close();
+-        this.used.set(INITIAL_COUNT);
++        used.set(INITIAL_COUNT);
+     }
+ 
+     /**
+@@ -116,8 +108,8 @@ public boolean incrementAndCheckState(final Long increment) {
+             open();
+         }
+ 
+-        final long used = this.used.addAndGet(increment);
+-        if (used > threshold) {
++        final long currentUsage = used.addAndGet(increment.longValue());
++        if (currentUsage > threshold) {
+             open();
+         }
+ 
+diff --git a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+index 7159f2816..2e3d3ee28 100644
+--- a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
++++ b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+@@ -35,6 +35,14 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
+ 
+     private static final long zeroThreshold = 0L;
+ 
++    @Test
++    void testCheckStateInheritedFromAbstractCircuitBreaker() {
++        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
++        assertTrue(circuit.checkState(), "A new circuit breaker should be closed");
++        assertTrue(circuit.isClosed(), "A new circuit breaker should report closed state");
++        assertFalse(circuit.isOpen(), "A new circuit breaker should not report open state");
++    }
++
+     /**
+      * Tests that closing a {@code ThresholdCircuitBreaker} resets the internal counter.
+      */
+@@ -43,7 +51,7 @@ void testClosingThresholdCircuitBreaker() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+         circuit.close();
+-        // now the internal counter is back at zero, not 9 anymore. So it is safe to increment 9 again
++        assertTrue(circuit.checkState(), "The circuit breaker should be closed after calling close()");
+         assertTrue(circuit.incrementAndCheckState(9L), "Internal counter was not reset back to zero");
+     }
+ 
+@@ -64,16 +72,19 @@ void testThreshold() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+         assertTrue(circuit.incrementAndCheckState(1L), "Circuit opened before reaching the threshold");
++        assertTrue(circuit.checkState(), "The circuit breaker should still be closed at the threshold");
+     }
+ 
+     /**
+-     * Tests that exceeding the threshold raises an exception.
++     * Tests that exceeding the threshold opens the circuit breaker.
+      */
+     @Test
+     void testThresholdCircuitBreakingException() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+         assertFalse(circuit.incrementAndCheckState(2L), "The circuit was supposed to be open after increment above the threshold");
++        assertFalse(circuit.checkState(), "The circuit breaker should report open state after exceeding the threshold");
++        assertTrue(circuit.isOpen(), "The circuit breaker should be open after exceeding the threshold");
+     }
+ 
+     /**
+@@ -83,6 +94,7 @@ void testThresholdCircuitBreakingException() {
+     void testThresholdEqualsZero() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
+         assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
++        assertFalse(circuit.checkState(), "When the threshold is zero, the circuit should remain open");
+     }
+ 
+ }

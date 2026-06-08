@@ -79,21 +79,13 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
 
     /**
      * {@inheritDoc}
-     */
-    @Override
-    public boolean checkState() {
-        return !isOpen();
-    }
-
-    /**
-     * {@inheritDoc}
      *
      * <p>Resets the internal counter back to its initial value (zero).</p>
      */
     @Override
     public void close() {
         super.close();
-        this.used.set(INITIAL_COUNT);
+        used.set(INITIAL_COUNT);
     }
 
     /**
@@ -116,8 +108,8 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
             open();
         }
 
-        final long used = this.used.addAndGet(increment);
-        if (used > threshold) {
+        final long currentUsage = used.addAndGet(increment.longValue());
+        if (currentUsage > threshold) {
             open();
         }
 

@@ -35,6 +35,14 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
 
     private static final long zeroThreshold = 0L;
 
+    @Test
+    void testCheckStateInheritedFromAbstractCircuitBreaker() {
+        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+        assertTrue(circuit.checkState(), "A new circuit breaker should be closed");
+        assertTrue(circuit.isClosed(), "A new circuit breaker should report closed state");
+        assertFalse(circuit.isOpen(), "A new circuit breaker should not report open state");
+    }
+
     /**
      * Tests that closing a {@code ThresholdCircuitBreaker} resets the internal counter.
      */
@@ -43,7 +51,7 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
         circuit.incrementAndCheckState(9L);
         circuit.close();
-        // now the internal counter is back at zero, not 9 anymore. So it is safe to increment 9 again
+        assertTrue(circuit.checkState(), "The circuit breaker should be closed after calling close()");
         assertTrue(circuit.incrementAndCheckState(9L), "Internal counter was not reset back to zero");
     }
 
@@ -64,16 +72,19 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
         circuit.incrementAndCheckState(9L);
         assertTrue(circuit.incrementAndCheckState(1L), "Circuit opened before reaching the threshold");
+        assertTrue(circuit.checkState(), "The circuit breaker should still be closed at the threshold");
     }
 
     /**
-     * Tests that exceeding the threshold raises an exception.
+     * Tests that exceeding the threshold opens the circuit breaker.
      */
     @Test
     void testThresholdCircuitBreakingException() {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
         circuit.incrementAndCheckState(9L);
         assertFalse(circuit.incrementAndCheckState(2L), "The circuit was supposed to be open after increment above the threshold");
+        assertFalse(circuit.checkState(), "The circuit breaker should report open state after exceeding the threshold");
+        assertTrue(circuit.isOpen(), "The circuit breaker should be open after exceeding the threshold");
     }
 
     /**
@@ -83,6 +94,7 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
     void testThresholdEqualsZero() {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
         assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
+        assertFalse(circuit.checkState(), "When the threshold is zero, the circuit should remain open");
     }
 
 }

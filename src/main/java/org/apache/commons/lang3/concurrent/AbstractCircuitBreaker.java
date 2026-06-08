@@ -119,11 +119,17 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
         }
     }
 
+    protected boolean checkState(final State currentState) {
+        return !isOpen(currentState);
+    }
+
     /**
      * {@inheritDoc}
      */
     @Override
-    public abstract boolean checkState();
+    public boolean checkState() {
+        return checkState(state.get());
+    }
 
     /**
      * {@inheritDoc}
