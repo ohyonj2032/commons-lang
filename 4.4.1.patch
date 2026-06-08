@@ -1,0 +1,237 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..32ea0ae8d 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -18,6 +18,7 @@
+ 
+ import java.beans.PropertyChangeListener;
+ import java.beans.PropertyChangeSupport;
++import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ /**
+@@ -56,6 +57,18 @@ public State oppositeState() {
+             public State oppositeState() {
+                 return CLOSED;
+             }
++        },
++
++        /** The half-open state. */
++        HALF_OPEN {
++
++            /**
++             * {@inheritDoc}
++             */
++            @Override
++            public State oppositeState() {
++                return HALF_OPEN;
++            }
+         };
+ 
+         /**
+@@ -83,8 +96,21 @@ protected static boolean isOpen(final State state) {
+         return state == State.OPEN;
+     }
+ 
++    /**
++     * Converts the given state value to a boolean <em>half-open</em> property.
++     *
++     * @param state the state to be converted
++     * @return the boolean half-open flag
++     */
++    protected static boolean isHalfOpen(final State state) {
++        return state == State.HALF_OPEN;
++    }
++
+     /** The current state of this circuit breaker. */
+     protected final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
++    
++    /** Flag to ensure only one probe is allowed in half-open state. */
++    private final AtomicBoolean probeAllowed = new AtomicBoolean(true);
+ 
+     /** An object for managing change listeners registered at this instance. */
+     private final PropertyChangeSupport changeSupport;
+@@ -114,8 +140,15 @@ public void addChangeListener(final PropertyChangeListener listener) {
+      * @param newState the new state to be set
+      */
+     protected void changeState(final State newState) {
+-        if (state.compareAndSet(newState.oppositeState(), newState)) {
+-            changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
++        final State oldState = state.get();
++        if (oldState != newState) {
++            if (state.compareAndSet(oldState, newState)) {
++                // Reset probe flag when entering half-open state
++                if (newState == State.HALF_OPEN) {
++                    probeAllowed.set(true);
++                }
++                changeSupport.firePropertyChange(PROPERTY_NAME, isOpen(oldState), isOpen(newState));
++            }
+         }
+     }
+ 
+@@ -144,7 +177,15 @@ public void close() {
+      */
+     @Override
+     public boolean isClosed() {
+-        return !isOpen();
++        return !isOpen() && !isHalfOpen();
++    }
++
++    /**
++     * {@inheritDoc}
++     */
++    @Override
++    public boolean isHalfOpen() {
++        return isHalfOpen(state.get());
+     }
+ 
+     /**
+@@ -163,6 +204,14 @@ public void open() {
+         changeState(State.OPEN);
+     }
+ 
++    /**
++     * {@inheritDoc}
++     */
++    @Override
++    public boolean tryProbe() {
++        return isHalfOpen() && probeAllowed.compareAndSet(true, false);
++    }
++
+     /**
+      * Removes the specified change listener from this circuit breaker.
+      *
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/CircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/CircuitBreaker.java
+index 910d30e25..7f2d89210 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/CircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/CircuitBreaker.java
+@@ -76,6 +76,16 @@
+      */
+     boolean isClosed();
+ 
++    /**
++     * Tests the current half-open state of this circuit breaker. A return value of
++     * <strong>true</strong> means that the circuit breaker is currently half-open,
++     * indicating that it is allowing a single probe request to test the downstream service.
++     *
++     * @return the current half-open state of this circuit breaker.
++     * @since 3.17
++     */
++    boolean isHalfOpen();
++
+     /**
+      * Tests the current open state of this circuit breaker. A return value of
+      * <strong>true</strong> means that the circuit breaker is currently open indicating a
+@@ -91,4 +101,18 @@
+      * available. If this circuit breaker is already open, this method has no effect.
+      */
+     void open();
++
++    /**
++     * Attempts to probe the downstream service when the circuit breaker is in half-open state.
++     * Returns <strong>true</strong> if the probe is allowed (i.e., the circuit breaker is in
++     * half-open state and this is the first probe attempt), <strong>false</strong> otherwise.
++     * <p>
++     * If the probe is successful, the caller should call {@link #close()} to close the circuit breaker.
++     * If the probe fails, the caller should call {@link #open()} to reopen the circuit breaker.
++     * </p>
++     *
++     * @return <strong>true</strong> if the probe is allowed, <strong>false</strong> otherwise
++     * @since 3.17
++     */
++    boolean tryProbe();
+ }
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..27ace1fe5 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -41,7 +41,7 @@
+  *     if (breaker.incrementAndCheckState(memoryUsed)) {
+  *         // actually handle this request
+  *     } else {
+- *         // do something else, e.g. send an error code
++ *         // do something else, e.g., send an error code
+  *     }
+  * }
+  * </pre>
+@@ -67,14 +67,37 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
+      */
+     private final AtomicLong used;
+ 
++    /**
++     * The timeout in milliseconds after which the circuit breaker transitions from OPEN to HALF_OPEN.
++     */
++    private final long timeoutMillis;
++
++    /**
++     * The timestamp when the circuit breaker was last opened.
++     */
++    private final AtomicLong lastOpenedTime;
++
+     /**
+      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
+      *
+      * @param threshold the threshold.
+      */
+     public ThresholdCircuitBreaker(final long threshold) {
+-        this.used = new AtomicLong(INITIAL_COUNT);
++        this(threshold, 0L);
++    }
++
++    /**
++     * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold and timeout.
++     *
++     * @param threshold the threshold.
++     * @param timeoutMillis the timeout in milliseconds after which the circuit breaker transitions from OPEN to HALF_OPEN.
++     * @since 3.17
++     */
++    public ThresholdCircuitBreaker(final long threshold, final long timeoutMillis) {
+         this.threshold = threshold;
++        this.timeoutMillis = timeoutMillis;
++        this.used = new AtomicLong(INITIAL_COUNT);
++        this.lastOpenedTime = new AtomicLong(0L);
+     }
+ 
+     /**
+@@ -82,6 +105,15 @@ public ThresholdCircuitBreaker(final long threshold) {
+      */
+     @Override
+     public boolean checkState() {
++        if (isOpen() && timeoutMillis > 0) {
++            final long currentTime = System.currentTimeMillis();
++            final long openedTime = lastOpenedTime.get();
++            if (currentTime - openedTime >= timeoutMillis) {
++                if (state.compareAndSet(State.OPEN, State.HALF_OPEN)) {
++                    return true;
++                }
++            }
++        }
+         return !isOpen();
+     }
+ 
+@@ -116,12 +148,23 @@ public boolean incrementAndCheckState(final Long increment) {
+             open();
+         }
+ 
+-        final long used = this.used.addAndGet(increment);
+-        if (used > threshold) {
++        final long currentUsed = this.used.addAndGet(increment);
++        if (currentUsed > threshold) {
+             open();
+         }
+ 
+         return checkState();
+     }
+ 
++    /**
++     * {@inheritDoc}
++     */
++    @Override
++    public void open() {
++        if (!isOpen()) {
++            lastOpenedTime.set(System.currentTimeMillis());
++            super.open();
++        }
++    }
++
+ }

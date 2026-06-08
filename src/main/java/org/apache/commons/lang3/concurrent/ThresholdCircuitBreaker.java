@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *     if (breaker.incrementAndCheckState(memoryUsed)) {
  *         // actually handle this request
  *     } else {
- *         // do something else, e.g. send an error code
+ *         // do something else, e.g., send an error code
  *     }
  * }
  * </pre>
@@ -68,13 +68,36 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     private final AtomicLong used;
 
     /**
+     * The timeout in milliseconds after which the circuit breaker transitions from OPEN to HALF_OPEN.
+     */
+    private final long timeoutMillis;
+
+    /**
+     * The timestamp when the circuit breaker was last opened.
+     */
+    private final AtomicLong lastOpenedTime;
+
+    /**
      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
      *
      * @param threshold the threshold.
      */
     public ThresholdCircuitBreaker(final long threshold) {
-        this.used = new AtomicLong(INITIAL_COUNT);
+        this(threshold, 0L);
+    }
+
+    /**
+     * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold and timeout.
+     *
+     * @param threshold the threshold.
+     * @param timeoutMillis the timeout in milliseconds after which the circuit breaker transitions from OPEN to HALF_OPEN.
+     * @since 3.17
+     */
+    public ThresholdCircuitBreaker(final long threshold, final long timeoutMillis) {
         this.threshold = threshold;
+        this.timeoutMillis = timeoutMillis;
+        this.used = new AtomicLong(INITIAL_COUNT);
+        this.lastOpenedTime = new AtomicLong(0L);
     }
 
     /**
@@ -82,6 +105,15 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
      */
     @Override
     public boolean checkState() {
+        if (isOpen() && timeoutMillis > 0) {
+            final long currentTime = System.currentTimeMillis();
+            final long openedTime = lastOpenedTime.get();
+            if (currentTime - openedTime >= timeoutMillis) {
+                if (state.compareAndSet(State.OPEN, State.HALF_OPEN)) {
+                    return true;
+                }
+            }
+        }
         return !isOpen();
     }
 
@@ -116,12 +148,23 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
             open();
         }
 
-        final long used = this.used.addAndGet(increment);
-        if (used > threshold) {
+        final long currentUsed = this.used.addAndGet(increment);
+        if (currentUsed > threshold) {
             open();
         }
 
         return checkState();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void open() {
+        if (!isOpen()) {
+            lastOpenedTime.set(System.currentTimeMillis());
+            super.open();
+        }
     }
 
 }

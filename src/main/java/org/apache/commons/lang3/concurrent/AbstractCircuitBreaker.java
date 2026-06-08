@@ -18,6 +18,7 @@ package org.apache.commons.lang3.concurrent;
 
 import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -56,6 +57,18 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
             public State oppositeState() {
                 return CLOSED;
             }
+        },
+
+        /** The half-open state. */
+        HALF_OPEN {
+
+            /**
+             * {@inheritDoc}
+             */
+            @Override
+            public State oppositeState() {
+                return HALF_OPEN;
+            }
         };
 
         /**
@@ -83,8 +96,21 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
         return state == State.OPEN;
     }
 
+    /**
+     * Converts the given state value to a boolean <em>half-open</em> property.
+     *
+     * @param state the state to be converted
+     * @return the boolean half-open flag
+     */
+    protected static boolean isHalfOpen(final State state) {
+        return state == State.HALF_OPEN;
+    }
+
     /** The current state of this circuit breaker. */
     protected final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
+    
+    /** Flag to ensure only one probe is allowed in half-open state. */
+    private final AtomicBoolean probeAllowed = new AtomicBoolean(true);
 
     /** An object for managing change listeners registered at this instance. */
     private final PropertyChangeSupport changeSupport;
@@ -114,8 +140,15 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * @param newState the new state to be set
      */
     protected void changeState(final State newState) {
-        if (state.compareAndSet(newState.oppositeState(), newState)) {
-            changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
+        final State oldState = state.get();
+        if (oldState != newState) {
+            if (state.compareAndSet(oldState, newState)) {
+                // Reset probe flag when entering half-open state
+                if (newState == State.HALF_OPEN) {
+                    probeAllowed.set(true);
+                }
+                changeSupport.firePropertyChange(PROPERTY_NAME, isOpen(oldState), isOpen(newState));
+            }
         }
     }
 
@@ -144,7 +177,15 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     @Override
     public boolean isClosed() {
-        return !isOpen();
+        return !isOpen() && !isHalfOpen();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean isHalfOpen() {
+        return isHalfOpen(state.get());
     }
 
     /**
@@ -161,6 +202,14 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
     @Override
     public void open() {
         changeState(State.OPEN);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean tryProbe() {
+        return isHalfOpen() && probeAllowed.compareAndSet(true, false);
     }
 
     /**
