@@ -16,6 +16,10 @@
  */
 package org.apache.commons.lang3.arch;
 
+import org.apache.commons.lang3.concurrent.RetryPolicy;
+import org.apache.commons.lang3.exception.ContextedException;
+import org.apache.commons.lang3.function.FailableFunction;
+
 /**
  * Represents a microprocessor and defines some properties like architecture and type.
  *
@@ -241,6 +245,11 @@ public class Processor {
      */
     public boolean isX86() {
         return Type.X86 == type;
+    }
+
+    public <R, E extends Exception> R processWithRetry(final FailableFunction<? super Processor, R, E> function,
+            final int maxRetries) throws ContextedException {
+        return new RetryPolicy(maxRetries).execute(this, function);
     }
 
     @Override
