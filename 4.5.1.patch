@@ -1,0 +1,98 @@
+diff --git a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+index 7159f2816..8b51af031 100644
+--- a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
++++ b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+@@ -20,7 +20,15 @@
+ import static org.junit.jupiter.api.Assertions.assertFalse;
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+ 
++import java.beans.PropertyChangeEvent;
++import java.beans.PropertyChangeListener;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import java.util.concurrent.CountDownLatch;
++
+ import org.apache.commons.lang3.AbstractLangTest;
++import org.apache.commons.lang3.exception.ContextedRuntimeException;
+ import org.junit.jupiter.api.Test;
+ 
+ /**
+@@ -85,4 +93,77 @@ void testThresholdEqualsZero() {
+         assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
+     }
+ 
++    /**
++     * Tests concurrent state transitions of a ThresholdCircuitBreaker.
++     * This test simulates 100 threads simultaneously calling incrementAndCheckState()
++     * with a threshold of 50, and verifies proper concurrent behavior.
++     */
++    @Test
++    void testConcurrentStateTransition() throws InterruptedException {
++        final long concurrentThreshold = 50L;
++        final int threadCount = 100;
++        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(concurrentThreshold);
++        final CountDownLatch startLatch = new CountDownLatch(1);
++        final CountDownLatch doneLatch = new CountDownLatch(threadCount);
++        final List<ContextedRuntimeException> exceptions = Collections.synchronizedList(new ArrayList<>());
++        final List<PropertyChangeEvent> stateChanges = Collections.synchronizedList(new ArrayList<>());
++        
++        // Add property change listener to track state transitions
++        circuit.addChangeListener(new PropertyChangeListener() {
++            @Override
++            public void propertyChange(final PropertyChangeEvent evt) {
++                if (AbstractCircuitBreaker.PROPERTY_NAME.equals(evt.getPropertyName())) {
++                    stateChanges.add(evt);
++                }
++            }
++        });
++        
++        // Create and start threads
++        final List<Thread> threads = new ArrayList<>(threadCount);
++        for (int i = 0; i < threadCount; i++) {
++            final int threadId = i;
++            final Thread thread = new Thread(() -> {
++                try {
++                    startLatch.await(); // Wait for all threads to start simultaneously
++                    circuit.incrementAndCheckState(1L); // Increment by 1
++                } catch (final Exception e) {
++                    final ContextedRuntimeException cre = new ContextedRuntimeException("Concurrent test failed in thread " + threadId, e);
++                    cre.addContextValue("threshold", concurrentThreshold);
++                    cre.addContextValue("threadId", threadId);
++                    cre.addContextValue("openState", circuit.isOpen());
++                    exceptions.add(cre);
++                } finally {
++                    doneLatch.countDown();
++                }
++            });
++            threads.add(thread);
++            thread.start();
++        }
++        
++        // Start all threads simultaneously
++        startLatch.countDown();
++        
++        // Wait for all threads to complete
++        doneLatch.await();
++        
++        // Assertions
++        assertTrue(circuit.isOpen(), "Circuit should be open after concurrent execution");
++        assertEquals(1, stateChanges.size(), "Should have exactly one state transition from closed to open");
++        
++        // Verify the state transition event
++        final PropertyChangeEvent event = stateChanges.get(0);
++        assertFalse((Boolean) event.getOldValue(), "State should change from closed (false)");
++        assertTrue((Boolean) event.getNewValue(), "State should change to open (true)");
++        
++        // Verify that all exceptions (if any) have proper context values
++        for (final ContextedRuntimeException exception : exceptions) {
++            assertEquals(concurrentThreshold, exception.getFirstContextValue("threshold"),
++                    "Exception context should contain correct threshold");
++            assertTrue(exception.getFirstContextValue("threadId") != null,
++                    "Exception context should contain threadId");
++            assertTrue(exception.getFirstContextValue("openState") != null,
++                    "Exception context should contain openState");
++        }
++    }
++
+ }
