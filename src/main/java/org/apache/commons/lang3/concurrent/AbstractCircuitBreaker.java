@@ -20,8 +20,30 @@ import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.commons.lang3.exception.ContextedException;
+
 /**
  * Base class for circuit breakers.
+ *
+ * <p>
+ * This abstract class provides common state management, property change notification,
+ * and the core state-checking logic shared by all circuit breaker implementations.
+ * Subclasses need only implement {@link #incrementAndCheckState(Object)} to define
+ * their specific circuit-breaking strategy.
+ * </p>
+ *
+ * <p>
+ * The default {@link #checkState()} implementation returns {@code !isOpen()}, which is
+ * sufficient for most circuit breaker implementations. Subclasses that require more
+ * complex state checking (e.g., time-window-based checks) can override this method.
+ * </p>
+ *
+ * <p>
+ * When a circuit breaker is in the open state and an operation is attempted, the
+ * {@link #checkStateOrThrow()} method can be used to throw a checked
+ * {@link ContextedException} carrying contextual information about the circuit breaker's
+ * current state, enabling callers to handle the open-circuit condition appropriately.
+ * </p>
  *
  * @param <T> the type of the value monitored by this circuit breaker
  * @since 3.5
@@ -120,10 +142,38 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
     }
 
     /**
-     * {@inheritDoc}
+     * Checks the state of this circuit breaker and changes it if necessary.
+     * <p>
+     * The default implementation simply returns whether the circuit breaker is currently
+     * closed ({@code !isOpen()}). Subclasses that need to perform more complex state
+     * checks (such as time-window-based evaluations) should override this method.
+     * </p>
+     *
+     * @return {@code true} if the circuit breaker is now closed; {@code false} otherwise
      */
     @Override
-    public abstract boolean checkState();
+    public boolean checkState() {
+        return !isOpen();
+    }
+
+    /**
+     * Checks the state of this circuit breaker and throws a {@link ContextedException}
+     * if the circuit breaker is currently open.
+     * <p>
+     * This method provides a checked-exception variant of the circuit breaker state check,
+     * allowing callers to handle the open-circuit condition as a checked exception with
+     * contextual information about the circuit breaker instance.
+     * </p>
+     *
+     * @throws ContextedException if the circuit breaker is open, carrying context about the current state
+     * @since 3.5
+     */
+    public void checkStateOrThrow() throws ContextedException {
+        if (isOpen()) {
+            throw new ContextedException("Circuit breaker is open")
+                    .addContextValue("Circuit Breaker", toString());
+        }
+    }
 
     /**
      * {@inheritDoc}

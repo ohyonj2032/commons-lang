@@ -1,0 +1,186 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..63a06c0e8 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -20,9 +20,31 @@
+ import java.beans.PropertyChangeSupport;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
++import org.apache.commons.lang3.exception.ContextedException;
++
+ /**
+  * Base class for circuit breakers.
+  *
++ * <p>
++ * This abstract class provides common state management, property change notification,
++ * and the core state-checking logic shared by all circuit breaker implementations.
++ * Subclasses need only implement {@link #incrementAndCheckState(Object)} to define
++ * their specific circuit-breaking strategy.
++ * </p>
++ *
++ * <p>
++ * The default {@link #checkState()} implementation returns {@code !isOpen()}, which is
++ * sufficient for most circuit breaker implementations. Subclasses that require more
++ * complex state checking (e.g., time-window-based checks) can override this method.
++ * </p>
++ *
++ * <p>
++ * When a circuit breaker is in the open state and an operation is attempted, the
++ * {@link #checkStateOrThrow()} method can be used to throw a checked
++ * {@link ContextedException} carrying contextual information about the circuit breaker's
++ * current state, enabling callers to handle the open-circuit condition appropriately.
++ * </p>
++ *
+  * @param <T> the type of the value monitored by this circuit breaker
+  * @since 3.5
+  */
+@@ -120,10 +142,38 @@ protected void changeState(final State newState) {
+     }
+ 
+     /**
+-     * {@inheritDoc}
++     * Checks the state of this circuit breaker and changes it if necessary.
++     * <p>
++     * The default implementation simply returns whether the circuit breaker is currently
++     * closed ({@code !isOpen()}). Subclasses that need to perform more complex state
++     * checks (such as time-window-based evaluations) should override this method.
++     * </p>
++     *
++     * @return {@code true} if the circuit breaker is now closed; {@code false} otherwise
+      */
+     @Override
+-    public abstract boolean checkState();
++    public boolean checkState() {
++        return !isOpen();
++    }
++
++    /**
++     * Checks the state of this circuit breaker and throws a {@link ContextedException}
++     * if the circuit breaker is currently open.
++     * <p>
++     * This method provides a checked-exception variant of the circuit breaker state check,
++     * allowing callers to handle the open-circuit condition as a checked exception with
++     * contextual information about the circuit breaker instance.
++     * </p>
++     *
++     * @throws ContextedException if the circuit breaker is open, carrying context about the current state
++     * @since 3.5
++     */
++    public void checkStateOrThrow() throws ContextedException {
++        if (isOpen()) {
++            throw new ContextedException("Circuit breaker is open")
++                    .addContextValue("Circuit Breaker", toString());
++        }
++    }
+ 
+     /**
+      * {@inheritDoc}
+@@ -172,4 +222,4 @@ public void removeChangeListener(final PropertyChangeListener listener) {
+         changeSupport.removePropertyChangeListener(listener);
+     }
+ 
+-}
++}
+\ No newline at end of file
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..a11003106 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -77,14 +77,6 @@ public ThresholdCircuitBreaker(final long threshold) {
+         this.threshold = threshold;
+     }
+ 
+-    /**
+-     * {@inheritDoc}
+-     */
+-    @Override
+-    public boolean checkState() {
+-        return !isOpen();
+-    }
+-
+     /**
+      * {@inheritDoc}
+      *
+@@ -124,4 +116,4 @@ public boolean incrementAndCheckState(final Long increment) {
+         return checkState();
+     }
+ 
+-}
++}
+\ No newline at end of file
+diff --git a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+index 7159f2816..5edc03311 100644
+--- a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
++++ b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+@@ -21,6 +21,7 @@
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+ 
+ import org.apache.commons.lang3.AbstractLangTest;
++import org.apache.commons.lang3.exception.ContextedException;
+ import org.junit.jupiter.api.Test;
+ 
+ /**
+@@ -85,4 +86,61 @@ void testThresholdEqualsZero() {
+         assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
+     }
+ 
+-}
++    /**
++     * Tests the default checkState() implementation inherited from AbstractCircuitBreaker.
++     */
++    @Test
++    void testCheckStateDefaultImplementation() {
++        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
++        assertTrue(circuit.checkState(), "Circuit should be closed initially");
++        circuit.open();
++        assertFalse(circuit.checkState(), "Circuit should be open after opening");
++        circuit.close();
++        assertTrue(circuit.checkState(), "Circuit should be closed after closing");
++    }
++
++    /**
++     * Tests that isOpen() and isClosed() work correctly after state changes.
++     */
++    @Test
++    void testIsOpenIsClosed() {
++        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
++        assertFalse(circuit.isOpen(), "New circuit should not be open");
++        assertTrue(circuit.isClosed(), "New circuit should be closed");
++        circuit.open();
++        assertTrue(circuit.isOpen(), "Circuit should be open after open()");
++        assertFalse(circuit.isClosed(), "Circuit should not be closed after open()");
++        circuit.close();
++        assertFalse(circuit.isOpen(), "Circuit should not be open after close()");
++        assertTrue(circuit.isClosed(), "Circuit should be closed after close()");
++    }
++
++    /**
++     * Tests that checkStateOrThrow() throws a ContextedException when the circuit is open
++     * and does nothing when closed, carrying the correct contextual information.
++     */
++    @Test
++    void testCheckStateOrThrowWhenOpen() throws ContextedException {
++        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
++        circuit.incrementAndCheckState(threshold + 1);
++        assertTrue(circuit.isOpen(), "Circuit should be open");
++        org.junit.jupiter.api.Assertions.assertThrows(ContextedException.class, () -> {
++            circuit.checkStateOrThrow();
++        }, "checkStateOrThrow() should throw ContextedException when circuit is open");
++    }
++
++    /**
++     * Tests that checkStateOrThrow() does not throw when the circuit is closed.
++     */
++    @Test
++    void testCheckStateOrThrowWhenClosed() throws ContextedException {
++        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
++        circuit.incrementAndCheckState(threshold - 1);
++        assertFalse(circuit.isOpen(), "Circuit should be closed");
++        // Should not throw any exception
++        circuit.checkStateOrThrow();
++        // If we reach here, the test passes
++        assertTrue(true, "checkStateOrThrow() should not throw when circuit is closed");
++    }
++
++}
+\ No newline at end of file

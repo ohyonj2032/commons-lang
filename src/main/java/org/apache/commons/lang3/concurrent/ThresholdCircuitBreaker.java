@@ -79,14 +79,6 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
 
     /**
      * {@inheritDoc}
-     */
-    @Override
-    public boolean checkState() {
-        return !isOpen();
-    }
-
-    /**
-     * {@inheritDoc}
      *
      * <p>Resets the internal counter back to its initial value (zero).</p>
      */

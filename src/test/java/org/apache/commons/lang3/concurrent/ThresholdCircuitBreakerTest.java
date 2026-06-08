@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.apache.commons.lang3.AbstractLangTest;
+import org.apache.commons.lang3.exception.ContextedException;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -83,6 +84,63 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
     void testThresholdEqualsZero() {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
         assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
+    }
+
+    /**
+     * Tests the default checkState() implementation inherited from AbstractCircuitBreaker.
+     */
+    @Test
+    void testCheckStateDefaultImplementation() {
+        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+        assertTrue(circuit.checkState(), "Circuit should be closed initially");
+        circuit.open();
+        assertFalse(circuit.checkState(), "Circuit should be open after opening");
+        circuit.close();
+        assertTrue(circuit.checkState(), "Circuit should be closed after closing");
+    }
+
+    /**
+     * Tests that isOpen() and isClosed() work correctly after state changes.
+     */
+    @Test
+    void testIsOpenIsClosed() {
+        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+        assertFalse(circuit.isOpen(), "New circuit should not be open");
+        assertTrue(circuit.isClosed(), "New circuit should be closed");
+        circuit.open();
+        assertTrue(circuit.isOpen(), "Circuit should be open after open()");
+        assertFalse(circuit.isClosed(), "Circuit should not be closed after open()");
+        circuit.close();
+        assertFalse(circuit.isOpen(), "Circuit should not be open after close()");
+        assertTrue(circuit.isClosed(), "Circuit should be closed after close()");
+    }
+
+    /**
+     * Tests that checkStateOrThrow() throws a ContextedException when the circuit is open
+     * and does nothing when closed, carrying the correct contextual information.
+     */
+    @Test
+    void testCheckStateOrThrowWhenOpen() throws ContextedException {
+        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+        circuit.incrementAndCheckState(threshold + 1);
+        assertTrue(circuit.isOpen(), "Circuit should be open");
+        org.junit.jupiter.api.Assertions.assertThrows(ContextedException.class, () -> {
+            circuit.checkStateOrThrow();
+        }, "checkStateOrThrow() should throw ContextedException when circuit is open");
+    }
+
+    /**
+     * Tests that checkStateOrThrow() does not throw when the circuit is closed.
+     */
+    @Test
+    void testCheckStateOrThrowWhenClosed() throws ContextedException {
+        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+        circuit.incrementAndCheckState(threshold - 1);
+        assertFalse(circuit.isOpen(), "Circuit should be closed");
+        // Should not throw any exception
+        circuit.checkStateOrThrow();
+        // If we reach here, the test passes
+        assertTrue(true, "checkStateOrThrow() should not throw when circuit is closed");
     }
 
 }
