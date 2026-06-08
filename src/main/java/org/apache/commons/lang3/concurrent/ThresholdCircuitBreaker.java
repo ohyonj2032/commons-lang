@@ -58,9 +58,19 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     private static final long INITIAL_COUNT = 0L;
 
     /**
+     * Constant for an unset opening timestamp.
+     */
+    private static final long UNSET_TIMESTAMP = -1L;
+
+    /**
      * The threshold.
      */
     private final long threshold;
+
+    /**
+     * The timeout in milliseconds after which an open circuit breaker transitions to half-open.
+     */
+    private final long timeoutMillis;
 
     /**
      * Controls the amount used.
@@ -68,13 +78,30 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     private final AtomicLong used;
 
     /**
+     * Stores the timestamp when the circuit breaker most recently entered the open state.
+     */
+    private final AtomicLong openedAt;
+
+    /**
      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
      *
      * @param threshold the threshold.
      */
     public ThresholdCircuitBreaker(final long threshold) {
+        this(threshold, UNSET_TIMESTAMP);
+    }
+
+    /**
+     * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold and cooldown timeout.
+     *
+     * @param threshold the threshold.
+     * @param timeoutMillis the cooldown timeout in milliseconds before an open circuit breaker transitions to half-open
+     */
+    public ThresholdCircuitBreaker(final long threshold, final long timeoutMillis) {
         this.used = new AtomicLong(INITIAL_COUNT);
+        this.openedAt = new AtomicLong(UNSET_TIMESTAMP);
         this.threshold = threshold;
+        this.timeoutMillis = timeoutMillis;
     }
 
     /**
@@ -82,7 +109,31 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
      */
     @Override
     public boolean checkState() {
-        return !isOpen();
+        return checkThreshold();
+    }
+
+    /**
+     * Performs the current threshold and timeout checks.
+     *
+     * @return <strong>true</strong> if the current operation can continue; <strong>false</strong> otherwise
+     */
+    protected boolean checkThreshold() {
+        if (threshold == 0) {
+            open();
+            return false;
+        }
+
+        if (isOpen() && timeoutMillis >= 0) {
+            final long currentOpenedAt = openedAt.get();
+            if (currentOpenedAt != UNSET_TIMESTAMP && System.currentTimeMillis() - currentOpenedAt >= timeoutMillis) {
+                changeState(State.HALF_OPEN);
+                if (isHalfOpen()) {
+                    used.set(INITIAL_COUNT);
+                }
+            }
+        }
+
+        return isClosed() || tryProbe();
     }
 
     /**
@@ -94,6 +145,7 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     public void close() {
         super.close();
         this.used.set(INITIAL_COUNT);
+        this.openedAt.set(UNSET_TIMESTAMP);
     }
 
     /**
@@ -112,16 +164,26 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
      */
     @Override
     public boolean incrementAndCheckState(final Long increment) {
-        if (threshold == 0) {
-            open();
+        if (!checkThreshold()) {
+            return false;
         }
 
         final long used = this.used.addAndGet(increment);
         if (used > threshold) {
             open();
+            return false;
         }
 
-        return checkState();
+        return checkThreshold();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void open() {
+        super.open();
+        this.openedAt.set(System.currentTimeMillis());
     }
 
 }

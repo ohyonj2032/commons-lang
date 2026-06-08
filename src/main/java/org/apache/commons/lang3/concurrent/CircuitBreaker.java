@@ -42,10 +42,9 @@ public interface CircuitBreaker<T> {
 
     /**
      * Checks the state of this circuit breaker and changes it if necessary. The return
-     * value indicates whether the circuit breaker is now in state <em>closed</em>; a value
-     * of <strong>true</strong> typically means that the current operation can continue.
+     * value indicates whether the current operation can continue.
      *
-     * @return <strong>true</strong> if the circuit breaker is now closed;
+     * @return <strong>true</strong> if the current operation can continue;
      * <strong>false</strong> otherwise.
      */
     boolean checkState();
@@ -62,7 +61,7 @@ public interface CircuitBreaker<T> {
      * value is incremented before the state check is performed.
      *
      * @param increment value to increment in the monitored value of the circuit breaker
-     * @return <strong>true</strong> if the circuit breaker is now closed;
+     * @return <strong>true</strong> if the current operation can continue;
      * <strong>false</strong> otherwise
      */
     boolean incrementAndCheckState(T increment);
@@ -86,9 +85,38 @@ public interface CircuitBreaker<T> {
     boolean isOpen();
 
     /**
+     * Tests whether this circuit breaker is currently half-open. In this state the
+     * circuit breaker permits at most one probe request to determine whether the
+     * monitored subsystem has recovered.
+     *
+     * @return the current half-open state of this circuit breaker.
+     * @since 4.4.1
+     */
+    default boolean isHalfOpen() {
+        return false;
+    }
+
+    /**
      * Opens this circuit breaker. Its state is changed to open. Depending on a concrete
      * implementation, it may close itself again if the monitored subsystem becomes
      * available. If this circuit breaker is already open, this method has no effect.
      */
     void open();
+
+    /**
+     * Attempts to acquire permission for a half-open probe request.
+     *
+     * <p>
+     * Exactly one concurrent caller should receive <strong>true</strong> while this
+     * circuit breaker is half-open. After the probe completes, callers are expected to
+     * invoke {@link #close()} on success or {@link #open()} on failure.
+     * </p>
+     *
+     * @return <strong>true</strong> if the caller obtained permission to perform the
+     * probe; <strong>false</strong> otherwise.
+     * @since 4.4.1
+     */
+    default boolean tryProbe() {
+        return false;
+    }
 }

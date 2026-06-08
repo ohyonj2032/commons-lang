@@ -18,6 +18,7 @@ package org.apache.commons.lang3.concurrent;
 
 import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -56,6 +57,18 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
             public State oppositeState() {
                 return CLOSED;
             }
+        },
+
+        /** The half-open state. */
+        HALF_OPEN {
+
+            /**
+             * {@inheritDoc}
+             */
+            @Override
+            public State oppositeState() {
+                return HALF_OPEN;
+            }
         };
 
         /**
@@ -74,7 +87,7 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
     public static final String PROPERTY_NAME = "open";
 
     /**
-     * Converts the given state value to a boolean <em>open</em> property.
+     * Converts the given state value to a boolean <em>open</em> state.
      *
      * @param state the state to be converted
      * @return the boolean open flag
@@ -83,8 +96,32 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
         return state == State.OPEN;
     }
 
+    /**
+     * Converts the given state value to a boolean <em>half-open</em> state.
+     *
+     * @param state the state to be converted
+     * @return the boolean half-open flag
+     */
+    protected static boolean isHalfOpen(final State state) {
+        return state == State.HALF_OPEN;
+    }
+
+    /**
+     * Converts the given state value to a boolean <em>tripped</em> state used for change
+     * notifications.
+     *
+     * @param state the state to be converted
+     * @return the boolean tripped flag
+     */
+    private static boolean isTripped(final State state) {
+        return state != State.CLOSED;
+    }
+
     /** The current state of this circuit breaker. */
     protected final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
+
+    /** Controls whether a half-open probe has already been granted. */
+    private final AtomicBoolean probeInProgress = new AtomicBoolean();
 
     /** An object for managing change listeners registered at this instance. */
     private final PropertyChangeSupport changeSupport;
@@ -114,9 +151,16 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * @param newState the new state to be set
      */
     protected void changeState(final State newState) {
-        if (state.compareAndSet(newState.oppositeState(), newState)) {
-            changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
-        }
+        State oldState;
+        do {
+            oldState = state.get();
+            if (oldState == newState) {
+                return;
+            }
+        } while (!state.compareAndSet(oldState, newState));
+
+        probeInProgress.set(false);
+        changeSupport.firePropertyChange(PROPERTY_NAME, isTripped(oldState), isTripped(newState));
     }
 
     /**
@@ -144,7 +188,15 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     @Override
     public boolean isClosed() {
-        return !isOpen();
+        return state.get() == State.CLOSED;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean isHalfOpen() {
+        return isHalfOpen(state.get());
     }
 
     /**
@@ -170,6 +222,23 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     public void removeChangeListener(final PropertyChangeListener listener) {
         changeSupport.removePropertyChangeListener(listener);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean tryProbe() {
+        while (isHalfOpen()) {
+            if (!probeInProgress.compareAndSet(false, true)) {
+                return false;
+            }
+            if (isHalfOpen()) {
+                return true;
+            }
+            probeInProgress.compareAndSet(true, false);
+        }
+        return false;
     }
 
 }
