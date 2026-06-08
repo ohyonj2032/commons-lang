@@ -56,6 +56,18 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
             public State oppositeState() {
                 return CLOSED;
             }
+        },
+
+        /** The half-open state. */
+        HALF_OPEN {
+
+            /**
+             * {@inheritDoc}
+             */
+            @Override
+            public State oppositeState() {
+                return CLOSED;
+            }
         };
 
         /**
@@ -80,7 +92,7 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * @return the boolean open flag
      */
     protected static boolean isOpen(final State state) {
-        return state == State.OPEN;
+        return state == State.OPEN || state == State.HALF_OPEN;
     }
 
     /** The current state of this circuit breaker. */
@@ -114,8 +126,16 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * @param newState the new state to be set
      */
     protected void changeState(final State newState) {
-        if (state.compareAndSet(newState.oppositeState(), newState)) {
-            changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
+        State currentState;
+        boolean changed = false;
+        while ((currentState = state.get()) != newState) {
+            if (state.compareAndSet(currentState, newState)) {
+                changed = true;
+                break;
+            }
+        }
+        if (changed) {
+            changeSupport.firePropertyChange(PROPERTY_NAME, isOpen(currentState), isOpen(newState));
         }
     }
 
@@ -159,8 +179,24 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * {@inheritDoc}
      */
     @Override
+    public boolean isHalfOpen() {
+        return state.get() == State.HALF_OPEN;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
     public void open() {
         changeState(State.OPEN);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean tryProbe() {
+        return state.compareAndSet(State.HALF_OPEN, State.OPEN);
     }
 
     /**

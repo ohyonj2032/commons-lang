@@ -68,13 +68,34 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     private final AtomicLong used;
 
     /**
+     * The timeout in milliseconds.
+     */
+    private final long timeoutMillis;
+
+    /**
+     * The timestamp when the circuit breaker was opened.
+     */
+    private final AtomicLong openTimestamp = new AtomicLong(INITIAL_COUNT);
+
+    /**
      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
      *
      * @param threshold the threshold.
      */
     public ThresholdCircuitBreaker(final long threshold) {
+        this(threshold, 0L);
+    }
+
+    /**
+     * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold and timeout.
+     *
+     * @param threshold the threshold.
+     * @param timeoutMillis the timeout in milliseconds.
+     */
+    public ThresholdCircuitBreaker(final long threshold, final long timeoutMillis) {
         this.used = new AtomicLong(INITIAL_COUNT);
         this.threshold = threshold;
+        this.timeoutMillis = timeoutMillis;
     }
 
     /**
@@ -82,6 +103,11 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
      */
     @Override
     public boolean checkState() {
+        if (timeoutMillis > 0 && state.get() == State.OPEN) {
+            if (System.currentTimeMillis() - openTimestamp.get() > timeoutMillis) {
+                changeState(State.HALF_OPEN);
+            }
+        }
         return !isOpen();
     }
 
@@ -122,6 +148,18 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
         }
 
         return checkState();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void open() {
+        final boolean wasOpen = state.get() == State.OPEN;
+        super.open();
+        if (!wasOpen) {
+            this.openTimestamp.set(System.currentTimeMillis());
+        }
     }
 
 }
