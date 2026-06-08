@@ -28,6 +28,29 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
 
+    protected static final class StateSnapshot {
+
+        private final State state;
+        private final long version;
+
+        private StateSnapshot(final State state, final long version) {
+            this.state = state;
+            this.version = version;
+        }
+
+        public State getState() {
+            return state;
+        }
+
+        public long getVersion() {
+            return version;
+        }
+
+        private StateSnapshot next(final State newState) {
+            return new StateSnapshot(newState, version + 1);
+        }
+    }
+
     /**
      * Enumerates the different states of a circuit breaker. This class also contains some logic for performing state transitions. This is done to avoid complex
      * if-conditions in the code of {@link CircuitBreaker}.
@@ -86,6 +109,8 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
     /** The current state of this circuit breaker. */
     protected final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
 
+    private final AtomicReference<StateSnapshot> stateSnapshot = new AtomicReference<>(new StateSnapshot(State.CLOSED, 0L));
+
     /** An object for managing change listeners registered at this instance. */
     private final PropertyChangeSupport changeSupport;
 
@@ -114,9 +139,31 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * @param newState the new state to be set
      */
     protected void changeState(final State newState) {
-        if (state.compareAndSet(newState.oppositeState(), newState)) {
-            changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
+        while (true) {
+            final StateSnapshot currentState = getStateSnapshot();
+            if (currentState.getState() == newState) {
+                return;
+            }
+            if (changeState(currentState, newState)) {
+                return;
+            }
         }
+    }
+
+    protected boolean changeState(final StateSnapshot expectedState, final State newState) {
+        if (expectedState.getState() == newState) {
+            return false;
+        }
+
+        final StateSnapshot updatedState = expectedState.next(newState);
+        if (!stateSnapshot.compareAndSet(expectedState, updatedState)) {
+            return false;
+        }
+
+        onStateChange(expectedState, updatedState);
+        state.set(updatedState.getState());
+        changeSupport.firePropertyChange(PROPERTY_NAME, isOpen(expectedState.getState()), isOpen(updatedState.getState()));
+        return true;
     }
 
     /**
@@ -131,6 +178,10 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
     @Override
     public void close() {
         changeState(State.CLOSED);
+    }
+
+    protected final StateSnapshot getStateSnapshot() {
+        return stateSnapshot.get();
     }
 
     /**
@@ -152,7 +203,10 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     @Override
     public boolean isOpen() {
-        return isOpen(state.get());
+        return isOpen(getStateSnapshot().getState());
+    }
+
+    protected void onStateChange(final StateSnapshot previousState, final StateSnapshot newState) {
     }
 
     /**

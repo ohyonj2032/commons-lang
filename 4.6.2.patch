@@ -1,0 +1,233 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..9f6fd4405 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -28,6 +28,29 @@
+  */
+ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
+ 
++    protected static final class StateSnapshot {
++
++        private final State state;
++        private final long version;
++
++        private StateSnapshot(final State state, final long version) {
++            this.state = state;
++            this.version = version;
++        }
++
++        public State getState() {
++            return state;
++        }
++
++        public long getVersion() {
++            return version;
++        }
++
++        private StateSnapshot next(final State newState) {
++            return new StateSnapshot(newState, version + 1);
++        }
++    }
++
+     /**
+      * Enumerates the different states of a circuit breaker. This class also contains some logic for performing state transitions. This is done to avoid complex
+      * if-conditions in the code of {@link CircuitBreaker}.
+@@ -86,6 +109,8 @@ protected static boolean isOpen(final State state) {
+     /** The current state of this circuit breaker. */
+     protected final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
+ 
++    private final AtomicReference<StateSnapshot> stateSnapshot = new AtomicReference<>(new StateSnapshot(State.CLOSED, 0L));
++
+     /** An object for managing change listeners registered at this instance. */
+     private final PropertyChangeSupport changeSupport;
+ 
+@@ -114,9 +139,31 @@ public void addChangeListener(final PropertyChangeListener listener) {
+      * @param newState the new state to be set
+      */
+     protected void changeState(final State newState) {
+-        if (state.compareAndSet(newState.oppositeState(), newState)) {
+-            changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
++        while (true) {
++            final StateSnapshot currentState = getStateSnapshot();
++            if (currentState.getState() == newState) {
++                return;
++            }
++            if (changeState(currentState, newState)) {
++                return;
++            }
++        }
++    }
++
++    protected boolean changeState(final StateSnapshot expectedState, final State newState) {
++        if (expectedState.getState() == newState) {
++            return false;
++        }
++
++        final StateSnapshot updatedState = expectedState.next(newState);
++        if (!stateSnapshot.compareAndSet(expectedState, updatedState)) {
++            return false;
+         }
++
++        onStateChange(expectedState, updatedState);
++        state.set(updatedState.getState());
++        changeSupport.firePropertyChange(PROPERTY_NAME, isOpen(expectedState.getState()), isOpen(updatedState.getState()));
++        return true;
+     }
+ 
+     /**
+@@ -133,6 +180,10 @@ public void close() {
+         changeState(State.CLOSED);
+     }
+ 
++    protected final StateSnapshot getStateSnapshot() {
++        return stateSnapshot.get();
++    }
++
+     /**
+      * {@inheritDoc}
+      */
+@@ -152,7 +203,10 @@ public boolean isClosed() {
+      */
+     @Override
+     public boolean isOpen() {
+-        return isOpen(state.get());
++        return isOpen(getStateSnapshot().getState());
++    }
++
++    protected void onStateChange(final StateSnapshot previousState, final StateSnapshot newState) {
+     }
+ 
+     /**
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..9f950158c 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -17,6 +17,7 @@
+ package org.apache.commons.lang3.concurrent;
+ 
+ import java.util.concurrent.atomic.AtomicLong;
++import java.util.concurrent.atomic.AtomicReference;
+ 
+ /**
+  * A simple implementation of the <a
+@@ -52,6 +53,29 @@
+  */
+ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
+ 
++    private static final class UsageSnapshot {
++
++        private final long count;
++        private final long generation;
++
++        private UsageSnapshot(final long generation, final long count) {
++            this.generation = generation;
++            this.count = count;
++        }
++
++        public long getCount() {
++            return count;
++        }
++
++        public long getGeneration() {
++            return generation;
++        }
++
++        private UsageSnapshot increment(final long increment) {
++            return new UsageSnapshot(generation, count + increment);
++        }
++    }
++
+     /**
+      * The initial value of the internal counter.
+      */
+@@ -65,7 +89,9 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
+     /**
+      * Controls the amount used.
+      */
+-    private final AtomicLong used;
++    private final AtomicReference<UsageSnapshot> used;
++
++    private final AtomicLong openingCountSnapshot;
+ 
+     /**
+      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
+@@ -73,8 +99,9 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
+      * @param threshold the threshold.
+      */
+     public ThresholdCircuitBreaker(final long threshold) {
+-        this.used = new AtomicLong(INITIAL_COUNT);
++        this.used = new AtomicReference<>(new UsageSnapshot(getStateSnapshot().getVersion(), INITIAL_COUNT));
+         this.threshold = threshold;
++        this.openingCountSnapshot = new AtomicLong(INITIAL_COUNT);
+     }
+ 
+     /**
+@@ -93,7 +120,14 @@ public boolean checkState() {
+     @Override
+     public void close() {
+         super.close();
+-        this.used.set(INITIAL_COUNT);
++    }
++
++    public long getCurrentCount() {
++        return syncUsage(getStateSnapshot()).getCount();
++    }
++
++    public long getOpeningCountSnapshot() {
++        return openingCountSnapshot.get();
+     }
+ 
+     /**
+@@ -113,15 +147,48 @@ public long getThreshold() {
+     @Override
+     public boolean incrementAndCheckState(final Long increment) {
+         if (threshold == 0) {
++            openingCountSnapshot.set(INITIAL_COUNT);
+             open();
++            return false;
+         }
+ 
+-        final long used = this.used.addAndGet(increment);
+-        if (used > threshold) {
+-            open();
++        final long incrementValue = increment.longValue();
++        while (true) {
++            final StateSnapshot stateSnapshot = getStateSnapshot();
++            final UsageSnapshot currentUsage = syncUsage(stateSnapshot);
++            final UsageSnapshot updatedUsage = currentUsage.increment(incrementValue);
++
++            if (!used.compareAndSet(currentUsage, updatedUsage)) {
++                continue;
++            }
++
++            if (updatedUsage.getCount() > threshold) {
++                openingCountSnapshot.set(updatedUsage.getCount());
++                changeState(stateSnapshot, State.OPEN);
++            }
++
++            return !isOpen(getStateSnapshot().getState());
+         }
++    }
++
++    @Override
++    protected void onStateChange(final StateSnapshot previousState, final StateSnapshot newState) {
++        syncUsage(newState);
++    }
++
++    private UsageSnapshot syncUsage(final StateSnapshot stateSnapshot) {
++        while (true) {
++            final UsageSnapshot currentUsage = used.get();
++            if (currentUsage.getGeneration() == stateSnapshot.getVersion()) {
++                return currentUsage;
++            }
+ 
+-        return checkState();
++            final long nextCount = stateSnapshot.getState() == State.CLOSED ? INITIAL_COUNT : currentUsage.getCount();
++            final UsageSnapshot updatedUsage = new UsageSnapshot(stateSnapshot.getVersion(), nextCount);
++            if (used.compareAndSet(currentUsage, updatedUsage)) {
++                return updatedUsage;
++            }
++        }
+     }
+ 
+ }
