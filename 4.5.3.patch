@@ -1,0 +1,162 @@
+diff --git a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+index 7159f2816..c608d0c89 100644
+--- a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
++++ b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+@@ -16,17 +16,24 @@
+  */
+ package org.apache.commons.lang3.concurrent;
+ 
+-import static org.junit.jupiter.api.Assertions.assertEquals;
+-import static org.junit.jupiter.api.Assertions.assertFalse;
+-import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
++import java.util.List;
++import java.util.concurrent.CopyOnWriteArrayList;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.atomic.AtomicInteger;
+ 
+ import org.apache.commons.lang3.AbstractLangTest;
+-import org.junit.jupiter.api.Test;
++import org.apache.commons.lang3.exception.ContextedException;
++import org.junit.Test;
+ 
+ /**
+  * Test class for {@code ThresholdCircuitBreaker}.
+  */
+-class ThresholdCircuitBreakerTest extends AbstractLangTest {
++public class ThresholdCircuitBreakerTest extends AbstractLangTest {
+ 
+     /**
+      * Threshold used in tests.
+@@ -39,50 +46,117 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
+      * Tests that closing a {@code ThresholdCircuitBreaker} resets the internal counter.
+      */
+     @Test
+-    void testClosingThresholdCircuitBreaker() {
++    public void testClosingThresholdCircuitBreaker() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+         circuit.close();
+         // now the internal counter is back at zero, not 9 anymore. So it is safe to increment 9 again
+-        assertTrue(circuit.incrementAndCheckState(9L), "Internal counter was not reset back to zero");
++        assertTrue("Internal counter was not reset back to zero", circuit.incrementAndCheckState(9L));
+     }
+ 
+     /**
+      * Tests that we can get the threshold value correctly.
+      */
+     @Test
+-    void testGettingThreshold() {
++    public void testGettingThreshold() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+-        assertEquals(Long.valueOf(threshold), Long.valueOf(circuit.getThreshold()), "Wrong value of threshold");
++        assertEquals("Wrong value of threshold", Long.valueOf(threshold), Long.valueOf(circuit.getThreshold()));
+     }
+ 
+     /**
+      * Tests that the threshold is working as expected when incremented and no exception is thrown.
+      */
+     @Test
+-    void testThreshold() {
++    public void testThreshold() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+-        assertTrue(circuit.incrementAndCheckState(1L), "Circuit opened before reaching the threshold");
++        assertTrue("Circuit opened before reaching the threshold", circuit.incrementAndCheckState(1L));
+     }
+ 
+     /**
+      * Tests that exceeding the threshold raises an exception.
+      */
+     @Test
+-    void testThresholdCircuitBreakingException() {
++    public void testThresholdCircuitBreakingException() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+-        assertFalse(circuit.incrementAndCheckState(2L), "The circuit was supposed to be open after increment above the threshold");
++        assertFalse("The circuit was supposed to be open after increment above the threshold", circuit.incrementAndCheckState(2L));
+     }
+ 
+     /**
+      * Test that when threshold is zero, the circuit breaker is always open.
+      */
+     @Test
+-    void testThresholdEqualsZero() {
++    public void testThresholdEqualsZero() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
+-        assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
++        assertFalse("When the threshold is zero, the circuit is supposed to be always open", circuit.incrementAndCheckState(0L));
++    }
++
++    /**
++     * Tests concurrent state transitions to ensure thread safety and correct ContextedException handling.
++     */
++    @Test
++    public void testConcurrentStateTransition() throws InterruptedException {
++        final long testThreshold = 50L;
++        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(testThreshold);
++        final int threadCount = 100;
++
++        final CountDownLatch readyLatch = new CountDownLatch(threadCount);
++        final CountDownLatch startLatch = new CountDownLatch(1);
++        final CountDownLatch doneLatch = new CountDownLatch(threadCount);
++
++        final List<ContextedException> exceptions = new CopyOnWriteArrayList<>();
++        final AtomicInteger stateChanges = new AtomicInteger(0);
++
++        circuit.addChangeListener(evt -> stateChanges.incrementAndGet());
++
++        for (int i = 0; i < threadCount; i++) {
++            new Thread(() -> {
++                readyLatch.countDown();
++                try {
++                    startLatch.await();
++                    circuit.incrementAndCheckState(1L);
++                } catch (Exception e) {
++                    if (e instanceof ContextedException) {
++                        exceptions.add((ContextedException) e);
++                    } else if (e.getCause() instanceof ContextedException) {
++                        exceptions.add((ContextedException) e.getCause());
++                    }
++                } finally {
++                    doneLatch.countDown();
++                }
++            }).start();
++        }
++
++        readyLatch.await(); // Wait for all threads to be ready
++        startLatch.countDown(); // Release all threads at once
++        doneLatch.await(); // Wait for all threads to finish
++
++        // Assert final state is OPEN and state changed only once
++        assertTrue("Circuit should be open", circuit.isOpen());
++        assertEquals("State should only change once", 1, stateChanges.get());
++
++        // Assert that we collected at least one ContextedException
++        assertFalse("Should collect at least one ContextedException", exceptions.isEmpty());
++
++        // Assert ContextedException contains correct threshold and trigger count
++        for (ContextedException ex : exceptions) {
++            Object thresholdCtx = ex.getFirstContextValue("threshold");
++            assertNotNull("Context should contain 'threshold'", thresholdCtx);
++            assertEquals("Threshold context value should be 50", 50L, ((Number) thresholdCtx).longValue());
++
++            boolean hasCount = false;
++            for (org.apache.commons.lang3.tuple.Pair<String, Object> pair : ex.getContextEntries()) {
++                if (pair.getValue() instanceof Number) {
++                    long val = ((Number) pair.getValue()).longValue();
++                    if (val > 50L) {
++                        hasCount = true;
++                        break;
++                    }
++                }
++            }
++            assertTrue("Context should contain trigger count > 50", hasCount);
++        }
+     }
+ 
+ }
