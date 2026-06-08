@@ -264,13 +264,19 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
           <trimStackTrace>false</trimStackTrace>
+          <printSummary>true</printSummary>
         </configuration>
         <executions>
+          <execution>
+            <id>default-test</id>
+            <phase>none</phase>
+          </execution>
           <execution>
             <id>plain-tests</id>
             <goals>
               <goal>test</goal>
             </goals>
+            <phase>test</phase>
             <configuration>
               <includes>
                 <include>**/*Test.java</include>
@@ -278,10 +284,13 @@
               <excludes>
                 <exclude>**/*CircuitBreakerTest.java</exclude>
               </excludes>
+              <reuseForks>true</reuseForks>
+              <forkCount>1C</forkCount>
               <parallel>methods</parallel>
               <useUnlimitedThreads>false</useUnlimitedThreads>
               <threadCount>2</threadCount>
               <perCoreThreadCount>true</perCoreThreadCount>
+              <argLine>${argLine}</argLine>
             </configuration>
           </execution>
           <execution>
@@ -296,7 +305,8 @@
               </includes>
               <reuseForks>false</reuseForks>
               <forkCount>1</forkCount>
-              <argLine>-Xmx512m -XX:MaxMetaspaceSize=128m</argLine>
+              <parallel>none</parallel>
+              <argLine>-Xmx512m -XX:MaxMetaspaceSize=128m ${extraArgs}</argLine>
             </configuration>
           </execution>
         </executions>
