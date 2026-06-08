@@ -1,0 +1,51 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..46bde72d0 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -115,10 +115,22 @@ public void addChangeListener(final PropertyChangeListener listener) {
+      */
+     protected void changeState(final State newState) {
+         if (state.compareAndSet(newState.oppositeState(), newState)) {
++            stateTransitioned(newState);
+             changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
+         }
+     }
+ 
++    /**
++     * Invoked when the state of this circuit breaker has changed.
++     * Subclasses can override this method to perform additional actions atomically
++     * with the state transition.
++     *
++     * @param newState the new state
++     */
++    protected void stateTransitioned(final State newState) {
++        // default implementation does nothing
++    }
++
+     /**
+      * {@inheritDoc}
+      */
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..93cf1f12e 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -93,7 +93,18 @@ public boolean checkState() {
+     @Override
+     public void close() {
+         super.close();
+-        this.used.set(INITIAL_COUNT);
++    }
++
++    /**
++     * {@inheritDoc}
++     *
++     * <p>Resets the internal counter back to its initial value (zero) when state transitions to CLOSED.</p>
++     */
++    @Override
++    protected void stateTransitioned(final State newState) {
++        if (newState == State.CLOSED) {
++            this.used.set(INITIAL_COUNT);
++        }
+     }
+ 
+     /**

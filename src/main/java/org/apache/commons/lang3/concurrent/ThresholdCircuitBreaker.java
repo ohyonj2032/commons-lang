@@ -93,7 +93,18 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     @Override
     public void close() {
         super.close();
-        this.used.set(INITIAL_COUNT);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Resets the internal counter back to its initial value (zero) when state transitions to CLOSED.</p>
+     */
+    @Override
+    protected void stateTransitioned(final State newState) {
+        if (newState == State.CLOSED) {
+            this.used.set(INITIAL_COUNT);
+        }
     }
 
     /**

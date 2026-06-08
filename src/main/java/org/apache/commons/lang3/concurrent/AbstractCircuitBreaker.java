@@ -115,8 +115,20 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     protected void changeState(final State newState) {
         if (state.compareAndSet(newState.oppositeState(), newState)) {
+            stateTransitioned(newState);
             changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
         }
+    }
+
+    /**
+     * Invoked when the state of this circuit breaker has changed.
+     * Subclasses can override this method to perform additional actions atomically
+     * with the state transition.
+     *
+     * @param newState the new state
+     */
+    protected void stateTransitioned(final State newState) {
+        // default implementation does nothing
     }
 
     /**
