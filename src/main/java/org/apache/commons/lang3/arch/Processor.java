@@ -250,4 +250,21 @@ public class Processor {
         return builder.toString();
     }
 
+    /**
+     * Processes this processor with the given failable function and retry logic.
+     *
+     * @param <T> the type of the input to the function
+     * @param <R> the type of the result of the function
+     * @param <E> the type of exception thrown by the function
+     * @param function the function to execute
+     * @param maxRetries the maximum number of retries
+     * @return the result of the function
+     * @throws org.apache.commons.lang3.exception.ContextedException if the maximum number of retries is exceeded
+     * @since 3.15.0
+     */
+    @SuppressWarnings("unchecked")
+    public <T, R, E extends Exception> R processWithRetry(final org.apache.commons.lang3.function.FailableFunction<T, R, E> function, final int maxRetries) {
+        return org.apache.commons.lang3.concurrent.RetryPolicy.execute(function, (T) this, maxRetries);
+    }
+
 }
