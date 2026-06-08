@@ -206,6 +206,16 @@
             </inputExcludes>
           </configuration>
         </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.1.2</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-enforcer-plugin</artifactId>
+          <version>3.3.0</version>
+        </plugin>
       </plugins>
     </pluginManagement>
     <plugins>
@@ -252,19 +262,67 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <trimStackTrace>false</trimStackTrace>
+        </configuration>
         <executions>
           <execution>
-            <id>plain</id>
+            <id>plain-tests</id>
+            <goals>
+              <goal>test</goal>
+            </goals>
             <configuration>
               <includes>
                 <include>**/*Test.java</include>
               </includes>
-              <trimStackTrace>false</trimStackTrace>
+              <excludes>
+                <exclude>**/*CircuitBreakerTest.java</exclude>
+              </excludes>
+              <parallel>methods</parallel>
+              <useUnlimitedThreads>false</useUnlimitedThreads>
+              <threadCount>2</threadCount>
+              <perCoreThreadCount>true</perCoreThreadCount>
             </configuration>
           </execution>
-          <!-- <execution> <id>security-manager-test</id> <phase>integration-test</phase> <goals> <goal>test</goal> </goals> <configuration>
-            <includes> <include>**/*Test.java</include> </includes> <argLine>-Djava.security.manager -Djava.security.policy=${basedir}/src/test/resources/java.policy</argLine>
-            </configuration> </execution> -->
+          <execution>
+            <id>circuit-breaker-tests</id>
+            <goals>
+              <goal>test</goal>
+            </goals>
+            <phase>test</phase>
+            <configuration>
+              <includes>
+                <include>**/*CircuitBreakerTest.java</include>
+              </includes>
+              <reuseForks>false</reuseForks>
+              <forkCount>1</forkCount>
+              <argLine>-Xmx512m -XX:MaxMetaspaceSize=128m</argLine>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>enforce-constraints</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <banDuplicateClasses>
+                  <findAllDuplicates>true</findAllDuplicates>
+                  <checkCompileDependencies>true</checkCompileDependencies>
+                  <checkTestDependencies>true</checkTestDependencies>
+                  <ignoreClasses>
+                  </ignoreClasses>
+                </banDuplicateClasses>
+              </rules>
+              <fail>true</fail>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
       <plugin>
