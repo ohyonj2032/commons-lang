@@ -20,7 +20,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.apache.commons.lang3.AbstractLangTest;
+import org.apache.commons.lang3.exception.ContextedException;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -43,7 +51,6 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
         circuit.incrementAndCheckState(9L);
         circuit.close();
-        // now the internal counter is back at zero, not 9 anymore. So it is safe to increment 9 again
         assertTrue(circuit.incrementAndCheckState(9L), "Internal counter was not reset back to zero");
     }
 
@@ -85,4 +92,73 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
         assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
     }
 
+    /**
+     * High-concurrency stress test that simulates 100 threads concurrently calling
+     * {@code incrementAndCheckState()} with a threshold of 50. Verifies that:
+     * <ul>
+     *   <li>The circuit breaker eventually transitions to OPEN state</li>
+     *   <li>Only one state transition from CLOSED to OPEN occurs</li>
+     *   <li>All {@code ContextedException} instances thrown upon circuit opening
+     *       carry correct context values for threshold and the triggering count</li>
+     * </ul>
+     */
+    @Test
+    void testConcurrentStateTransition() throws Exception {
+        final long testThreshold = 50L;
+        final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(testThreshold);
+        final int threadCount = 100;
+
+        final CountDownLatch startLatch = new CountDownLatch(1);
+        final CountDownLatch doneLatch = new CountDownLatch(threadCount);
+        final Queue<ContextedException> exceptions = new ConcurrentLinkedQueue<>();
+        final AtomicInteger openTransitionCount = new AtomicInteger(0);
+
+        circuit.addChangeListener(event -> {
+            if ("open".equals(event.getPropertyName()) && Boolean.TRUE.equals(event.getNewValue())) {
+                openTransitionCount.incrementAndGet();
+            }
+        });
+
+        final Field usedField = ThresholdCircuitBreaker.class.getDeclaredField("used");
+        usedField.setAccessible(true);
+
+        for (int i = 0; i < threadCount; i++) {
+            new Thread(() -> {
+                try {
+                    startLatch.await();
+                    if (!circuit.incrementAndCheckState(1L)) {
+                        final AtomicLong used = (AtomicLong) usedField.get(circuit);
+                        final long currentCount = used.get();
+                        throw new ContextedException("Circuit breaker opened")
+                                .addContextValue("threshold", testThreshold)
+                                .addContextValue("count", currentCount);
+                    }
+                } catch (final ContextedException ex) {
+                    exceptions.add(ex);
+                } catch (final InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (final IllegalAccessException e) {
+                    throw new RuntimeException("Failed to access used field via reflection", e);
+                } finally {
+                    doneLatch.countDown();
+                }
+            }).start();
+        }
+
+        startLatch.countDown();
+        doneLatch.await();
+
+        assertTrue(circuit.isOpen(), "Circuit should be OPEN after exceeding threshold");
+        assertEquals(1, openTransitionCount.get(), "Only one state transition from CLOSED to OPEN should occur");
+        assertFalse(exceptions.isEmpty(), "There should be at least one ContextedException collected");
+
+        for (final ContextedException ex : exceptions) {
+            assertEquals(Long.valueOf(testThreshold), ex.getFirstContextValue("threshold"),
+                    "Context should contain correct threshold");
+            final Object countObj = ex.getFirstContextValue("count");
+            assertTrue(countObj != null, "Context count value must not be null");
+            final long count = ((Number) countObj).longValue();
+            assertTrue(count > testThreshold, "Count should be greater than threshold, but was " + count);
+        }
+    }
 }
