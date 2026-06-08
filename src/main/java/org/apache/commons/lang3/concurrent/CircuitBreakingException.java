@@ -16,13 +16,20 @@
  */
 package org.apache.commons.lang3.concurrent;
 
+import java.util.List;
+import java.util.Set;
+
+import org.apache.commons.lang3.exception.ContextedRuntimeException;
+import org.apache.commons.lang3.exception.ExceptionContext;
+import org.apache.commons.lang3.tuple.Pair;
+
 /**
  * An exception class used for reporting runtime error conditions related to
  * circuit breakers.
  *
  * @since 3.5
  */
-public class CircuitBreakingException extends RuntimeException {
+public class CircuitBreakingException extends ContextedRuntimeException {
 
     /**
      * The serial version UID.
@@ -33,6 +40,7 @@ public class CircuitBreakingException extends RuntimeException {
      * Creates a new, uninitialized instance of {@link CircuitBreakingException}.
      */
     public CircuitBreakingException() {
+        super();
     }
 
     /**
@@ -61,6 +69,17 @@ public class CircuitBreakingException extends RuntimeException {
      */
     public CircuitBreakingException(final Throwable cause) {
         super(cause);
+    }
+
+    /**
+     * Instantiates CircuitBreakingException with cause, message, and ExceptionContext.
+     *
+     * @param message  the exception message, may be null
+     * @param cause  the underlying cause of the exception, may be null
+     * @param context  the context used to store the additional information, null uses default implementation
+     */
+    public CircuitBreakingException(final String message, final Throwable cause, ExceptionContext context) {
+        super(message, cause, context);
     }
 
 }

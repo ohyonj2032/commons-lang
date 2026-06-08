@@ -121,9 +121,15 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
 
     /**
      * {@inheritDoc}
+     * <p>
+     * This implementation checks the state of the circuit breaker and returns true if it is closed.
+     * Subclasses can override this method to provide additional state checking logic.
+     * </p>
      */
     @Override
-    public abstract boolean checkState();
+    public boolean checkState() {
+        return !isOpen();
+    }
 
     /**
      * {@inheritDoc}
