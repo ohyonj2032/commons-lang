@@ -68,6 +68,14 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     private final AtomicLong used;
 
     /**
+     * Stores the counter value snapshot captured at the moment the threshold was
+     * exceeded. This provides a consistent, race-free snapshot for callers that
+     * need to include the triggering value in exception contexts, rather than
+     * reading the potentially stale or reset {@link #used} counter directly.
+     */
+    private final AtomicLong lastTriggeredValue;
+
+    /**
      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
      *
      * @param threshold the threshold.
@@ -75,6 +83,7 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     public ThresholdCircuitBreaker(final long threshold) {
         this.used = new AtomicLong(INITIAL_COUNT);
         this.threshold = threshold;
+        this.lastTriggeredValue = new AtomicLong(INITIAL_COUNT);
     }
 
     /**
@@ -88,12 +97,16 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     /**
      * {@inheritDoc}
      *
-     * <p>Resets the internal counter back to its initial value (zero).</p>
+     * <p>
+     * Resets the internal counter back to its initial value (zero). The counter
+     * reset is executed atomically within the state transition window via
+     * {@link #changeState(State, Runnable)}, ensuring that the counter is only
+     * cleared when the state actually transitions from OPEN to CLOSED.
+     * </p>
      */
     @Override
     public void close() {
-        super.close();
-        this.used.set(INITIAL_COUNT);
+        changeState(State.CLOSED, () -> this.used.set(INITIAL_COUNT));
     }
 
     /**
@@ -106,19 +119,47 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     }
 
     /**
+     * Gets the last counter value snapshot that triggered the circuit breaker
+     * to open. This value is captured at the exact moment the threshold was
+     * exceeded, providing a consistent snapshot for exception context reporting
+     * even if the counter has since been reset by a concurrent {@link #close()}.
+     *
+     * @return the counter value at the moment of the last threshold breach
+     */
+    public long getLastTriggeredValue() {
+        return lastTriggeredValue.get();
+    }
+
+    /**
      * {@inheritDoc}
      *
-     * <p>If the threshold is zero, the circuit breaker will be in a permanent <em>open</em> state.</p>
+     * <p>
+     * If the threshold is zero, the circuit breaker will be in a permanent
+     * <em>open</em> state.
+     * </p>
+     *
+     * <p>
+     * This method captures the state version <em>before</em> reading the
+     * internal counter, and uses {@link #tryChangeState(State, State, long)}
+     * to perform a single-shot CAS that is aborted if a concurrent
+     * {@link #close()} (or any other state transition) has occurred between
+     * the version capture and the CAS. This prevents the circuit breaker from
+     * reopening based on stale counter data after an explicit close.
+     * </p>
      */
     @Override
     public boolean incrementAndCheckState(final Long increment) {
         if (threshold == 0) {
+            lastTriggeredValue.set(0L);
             open();
+            return checkState();
         }
 
+        final long currentVersion = getStateVersion();
         final long used = this.used.addAndGet(increment);
         if (used > threshold) {
-            open();
+            lastTriggeredValue.set(used);
+            tryChangeState(State.CLOSED, State.OPEN, currentVersion);
         }
 
         return checkState();

@@ -1,0 +1,139 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..93f56f793 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -112,10 +112,31 @@ public void addChangeListener(final PropertyChangeListener listener) {
+      * of the state value, all registered change listeners are notified.
+      *
+      * @param newState the new state to be set
++     * @return {@code true} if the state transition actually occurred, {@code false} otherwise
+      */
+-    protected void changeState(final State newState) {
++    protected boolean changeState(final State newState) {
+         if (state.compareAndSet(newState.oppositeState(), newState)) {
+             changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
++            return true;
++        }
++        return false;
++    }
++
++    /**
++     * Changes the internal state of this circuit breaker and executes the given action
++     * atomically with the state transition. The action is only executed when the state
++     * transition actually occurs (i.e. CAS succeeds). This ensures that subclass
++     * counter resets are linked atomically with the state change &mdash; either both
++     * happen (CAS succeeds and action runs) or neither happens (CAS fails, action skipped).
++     *
++     * @param newState the new state to be set
++     * @param onSuccess the action to execute after a successful state transition, may be {@code null}
++     */
++    protected void changeState(final State newState, final Runnable onSuccess) {
++        if (changeState(newState)) {
++            if (onSuccess != null) {
++                onSuccess.run();
++            }
+         }
+     }
+ 
+@@ -172,4 +193,4 @@ public void removeChangeListener(final PropertyChangeListener listener) {
+         changeSupport.removePropertyChangeListener(listener);
+     }
+ 
+-}
++}
+\ No newline at end of file
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..aea8164bb 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -67,6 +67,14 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
+      */
+     private final AtomicLong used;
+ 
++    /**
++     * Stores the counter value snapshot captured at the moment the circuit breaker tripped.
++     * This field is used to provide accurate context for exception reporting, ensuring
++     * that the exception carries the counter value from the exact moment of tripping
++     * rather than a potentially stale value from the live counter.
++     */
++    private final AtomicLong trippedAt;
++
+     /**
+      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
+      *
+@@ -74,6 +82,7 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
+      */
+     public ThresholdCircuitBreaker(final long threshold) {
+         this.used = new AtomicLong(INITIAL_COUNT);
++        this.trippedAt = new AtomicLong(INITIAL_COUNT);
+         this.threshold = threshold;
+     }
+ 
+@@ -88,12 +97,14 @@ public boolean checkState() {
+     /**
+      * {@inheritDoc}
+      *
+-     * <p>Resets the internal counter back to its initial value (zero).</p>
++     * <p>Resets the internal counter back to its initial value (zero). The counter
++     * is only reset when the state transition from <em>open</em> to <em>closed</em>
++     * actually succeeds. If the circuit breaker is already closed, the counter is
++     * not modified.</p>
+      */
+     @Override
+     public void close() {
+-        super.close();
+-        this.used.set(INITIAL_COUNT);
++        changeState(State.CLOSED, () -> this.used.set(INITIAL_COUNT));
+     }
+ 
+     /**
+@@ -105,6 +116,26 @@ public long getThreshold() {
+         return threshold;
+     }
+ 
++    /**
++     * Gets the counter value captured at the moment the circuit breaker last tripped.
++     * This provides a stable snapshot for use in exception context, as opposed to
++     * reading the live counter which may have been reset by a concurrent {@link #close()}.
++     *
++     * @return the counter value at the moment of tripping
++     */
++    public long getTrippedCount() {
++        return trippedAt.get();
++    }
++
++    /**
++     * Gets the current value of the internal counter.
++     *
++     * @return the current used count
++     */
++    public long getUsed() {
++        return used.get();
++    }
++
+     /**
+      * {@inheritDoc}
+      *
+@@ -113,15 +144,19 @@ public long getThreshold() {
+     @Override
+     public boolean incrementAndCheckState(final Long increment) {
+         if (threshold == 0) {
++            trippedAt.set(INITIAL_COUNT);
+             open();
++            return false;
+         }
+ 
+         final long used = this.used.addAndGet(increment);
+         if (used > threshold) {
++            trippedAt.set(used);
+             open();
++            return false;
+         }
+ 
+-        return checkState();
++        return true;
+     }
+ 
+-}
++}
+\ No newline at end of file
