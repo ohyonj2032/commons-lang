@@ -29,6 +29,15 @@ import java.util.concurrent.atomic.AtomicLong;
  * </p>
  *
  * <p>
+ * When a non-zero {@code timeoutMillis} is configured, this circuit breaker supports the
+ * <em>half-open</em> state: after the breaker has been in the OPEN state for longer than
+ * the configured timeout, it automatically transitions to HALF_OPEN on the next call to
+ * {@link #checkState()} or {@link #incrementAndCheckState(Long)}. In the HALF_OPEN state,
+ * a single probe request is allowed through via {@link #tryProbe()}; this probe determines
+ * whether the monitored subsystem has recovered.
+ * </p>
+ *
+ * <p>
  * An example of use case could be a memory circuit breaker.
  * </p>
  *
@@ -63,26 +72,83 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     private final long threshold;
 
     /**
+     * The timeout in milliseconds before the circuit breaker automatically
+     * transitions from OPEN to HALF_OPEN. A value of 0 means no automatic
+     * transition (the breaker stays OPEN indefinitely).
+     */
+    private final long timeoutMillis;
+
+    /**
+     * The system time in milliseconds when the circuit breaker last entered
+     * the OPEN state.
+     */
+    private long openedTimeMillis;
+
+    /**
      * Controls the amount used.
      */
     private final AtomicLong used;
 
     /**
      * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the threshold.
+     * No timeout is configured, so the circuit breaker will never automatically transition
+     * from OPEN to HALF_OPEN.
      *
      * @param threshold the threshold.
      */
     public ThresholdCircuitBreaker(final long threshold) {
+        this(threshold, 0);
+    }
+
+    /**
+     * Creates a new instance of {@link ThresholdCircuitBreaker} and initializes the
+     * threshold and the timeout for automatic transition to the HALF_OPEN state.
+     *
+     * @param threshold the threshold; a value of 0 puts the breaker in permanent OPEN state
+     * @param timeoutMillis the timeout in milliseconds before auto-transitioning from
+     *                      OPEN to HALF_OPEN; a value of 0 disables auto-transition
+     */
+    public ThresholdCircuitBreaker(final long threshold, final long timeoutMillis) {
+        super();
         this.used = new AtomicLong(INITIAL_COUNT);
         this.threshold = threshold;
+        this.timeoutMillis = timeoutMillis;
     }
 
     /**
      * {@inheritDoc}
+     *
+     * <p>
+     * Before checking the state, this method evaluates whether the timeout
+     * has elapsed (via {@link #checkThreshold()}) and auto-transitions from
+     * OPEN to HALF_OPEN if appropriate. The circuit breaker is considered
+     * usable (returns <strong>true</strong>) when in the CLOSED or HALF_OPEN state.
+     * </p>
      */
     @Override
     public boolean checkState() {
-        return !isOpen();
+        checkThreshold();
+        return isClosed() || isHalfOpen();
+    }
+
+    /**
+     * Checks whether the configured timeout has elapsed since the circuit breaker
+     * entered the OPEN state, and if so, atomically transitions the state from
+     * OPEN to HALF_OPEN.
+     *
+     * <p>
+     * This method is called by {@link #checkState()} before evaluating the
+     * current state. It has no effect if {@code timeoutMillis} is 0 or if the
+     * breaker is not currently in the OPEN state.
+     * </p>
+     */
+    public void checkThreshold() {
+        if (timeoutMillis > 0 && state.get() == State.OPEN) {
+            final long elapsed = System.currentTimeMillis() - openedTimeMillis;
+            if (elapsed >= timeoutMillis) {
+                transitionToHalfOpen();
+            }
+        }
     }
 
     /**
@@ -106,6 +172,16 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     }
 
     /**
+     * Gets the timeout in milliseconds for automatic transition from OPEN
+     * to HALF_OPEN.
+     *
+     * @return the timeout in milliseconds, or 0 if no timeout is configured
+     */
+    public long getTimeoutMillis() {
+        return timeoutMillis;
+    }
+
+    /**
      * {@inheritDoc}
      *
      * <p>If the threshold is zero, the circuit breaker will be in a permanent <em>open</em> state.</p>
@@ -124,4 +200,15 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
         return checkState();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Records the current system time so that the timeout-based transition
+     * to HALF_OPEN can be evaluated later.</p>
+     */
+    @Override
+    public void open() {
+        super.open();
+        this.openedTimeMillis = System.currentTimeMillis();
+    }
 }

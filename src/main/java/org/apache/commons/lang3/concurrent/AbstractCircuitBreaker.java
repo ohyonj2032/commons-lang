@@ -18,6 +18,7 @@ package org.apache.commons.lang3.concurrent;
 
 import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -56,6 +57,23 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
             public State oppositeState() {
                 return CLOSED;
             }
+        },
+
+        /**
+         * The half-open state. In this state, the circuit breaker allows a single
+         * probe request to test whether the monitored subsystem has recovered.
+         * If the probe succeeds, the breaker transitions to {@link #CLOSED};
+         * if it fails, the breaker transitions back to {@link #OPEN}.
+         */
+        HALF_OPEN {
+
+            /**
+             * {@inheritDoc}
+             */
+            @Override
+            public State oppositeState() {
+                return CLOSED;
+            }
         };
 
         /**
@@ -86,6 +104,12 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
     /** The current state of this circuit breaker. */
     protected final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
 
+    /**
+     * Guard to ensure that only a single probe request is allowed
+     * when the circuit breaker is in the HALF_OPEN state.
+     */
+    private final AtomicBoolean probeGuard = new AtomicBoolean(false);
+
     /** An object for managing change listeners registered at this instance. */
     private final PropertyChangeSupport changeSupport;
 
@@ -114,7 +138,8 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * @param newState the new state to be set
      */
     protected void changeState(final State newState) {
-        if (state.compareAndSet(newState.oppositeState(), newState)) {
+        final State oldState = state.getAndSet(newState);
+        if (oldState != newState) {
             changeSupport.firePropertyChange(PROPERTY_NAME, !isOpen(newState), isOpen(newState));
         }
     }
@@ -130,6 +155,7 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     @Override
     public void close() {
+        probeGuard.set(false);
         changeState(State.CLOSED);
     }
 
@@ -144,7 +170,15 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     @Override
     public boolean isClosed() {
-        return !isOpen();
+        return state.get() == State.CLOSED;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean isHalfOpen() {
+        return state.get() == State.HALF_OPEN;
     }
 
     /**
@@ -160,6 +194,7 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      */
     @Override
     public void open() {
+        probeGuard.set(false);
         changeState(State.OPEN);
     }
 
@@ -172,4 +207,36 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
         changeSupport.removePropertyChangeListener(listener);
     }
 
+    /**
+     * Attempts to transition the circuit breaker from {@link State#OPEN} to
+     * {@link State#HALF_OPEN} atomically. This method is intended to be called
+     * by subclasses (such as time-based implementations) when a cooldown period
+     * has elapsed.
+     *
+     * @return <strong>true</strong> if the transition succeeded;
+     * <strong>false</strong> if the state was no longer OPEN
+     */
+    protected boolean transitionToHalfOpen() {
+        if (state.compareAndSet(State.OPEN, State.HALF_OPEN)) {
+            changeSupport.firePropertyChange(PROPERTY_NAME, true, false);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>
+     * In the HALF_OPEN state, only a single caller can acquire a probe permit
+     * at any given time. This is enforced atomically via an internal guard.
+     * The caller that successfully acquires the permit is responsible for
+     * evaluating the health of the monitored subsystem and then invoking
+     * {@link #close()} on success or {@link #open()} on failure.
+     * </p>
+     */
+    @Override
+    public boolean tryProbe() {
+        return isHalfOpen() && probeGuard.compareAndSet(false, true);
+    }
 }
