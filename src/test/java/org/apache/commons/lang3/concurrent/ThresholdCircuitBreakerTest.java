@@ -17,10 +17,11 @@
 package org.apache.commons.lang3.concurrent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.apache.commons.lang3.AbstractLangTest;
+import org.apache.commons.lang3.exception.ContextedException;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -67,22 +68,38 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
     }
 
     /**
-     * Tests that exceeding the threshold raises an exception.
+     * Tests that exceeding the threshold raises a {@link CircuitBreakingException}
+     * wrapping a {@link ContextedException} with context information.
      */
     @Test
     void testThresholdCircuitBreakingException() {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
         circuit.incrementAndCheckState(9L);
-        assertFalse(circuit.incrementAndCheckState(2L), "The circuit was supposed to be open after increment above the threshold");
+        final CircuitBreakingException ex = assertThrows(CircuitBreakingException.class,
+                () -> circuit.incrementAndCheckState(2L),
+                "Expected CircuitBreakingException when threshold exceeded");
+        assertTrue(ex.getCause() instanceof ContextedException,
+                "Cause should be ContextedException");
+        final ContextedException ce = (ContextedException) ex.getCause();
+        assertTrue(ce.getMessage().contains("Threshold exceeded"),
+                "Message should contain 'Threshold exceeded'");
     }
 
     /**
-     * Test that when threshold is zero, the circuit breaker is always open.
+     * Test that when threshold is zero, the circuit breaker is always open
+     * and throws a {@link CircuitBreakingException}.
      */
     @Test
     void testThresholdEqualsZero() {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
-        assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
+        final CircuitBreakingException ex = assertThrows(CircuitBreakingException.class,
+                () -> circuit.incrementAndCheckState(0L),
+                "When the threshold is zero, the circuit should throw CircuitBreakingException");
+        assertTrue(ex.getCause() instanceof ContextedException,
+                "Cause should be ContextedException");
+        final ContextedException ce = (ContextedException) ex.getCause();
+        assertTrue(ce.getMessage().contains("Threshold is zero"),
+                "Message should contain 'Threshold is zero'");
     }
 
 }

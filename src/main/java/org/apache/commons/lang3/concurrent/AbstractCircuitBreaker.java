@@ -20,8 +20,17 @@ import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.commons.lang3.exception.ContextedException;
+
 /**
  * Base class for circuit breakers.
+ *
+ * <p>
+ * This class provides common state management logic shared by all circuit breaker
+ * implementations, including the state variable, {@link #isOpen()}, {@link #isClosed()},
+ * and a default {@link #checkState()} implementation. Subclasses can override
+ * {@link #checkState()} if they need more complex state checking logic.
+ * </p>
  *
  * @param <T> the type of the value monitored by this circuit breaker
  * @since 3.5
@@ -121,9 +130,18 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
 
     /**
      * {@inheritDoc}
+     *
+     * <p>
+     * This default implementation returns the negation of {@link #isOpen()}, meaning
+     * the circuit breaker is considered closed (and thus operational) when it is not
+     * in the open state. Subclasses may override this method to provide more complex
+     * state checking logic (e.g., time-based automatic recovery).
+     * </p>
      */
     @Override
-    public abstract boolean checkState();
+    public boolean checkState() {
+        return !isOpen();
+    }
 
     /**
      * {@inheritDoc}
@@ -131,6 +149,21 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
     @Override
     public void close() {
         changeState(State.CLOSED);
+    }
+
+    /**
+     * Creates a {@link ContextedException} carrying context information about the
+     * circuit breaker at the moment it transitions to the open state. Subclasses
+     * may override this method to add additional context values specific to their
+     * monitoring logic.
+     *
+     * @param message the detail message for the exception
+     * @return a new {@link ContextedException} with circuit breaker context
+     */
+    protected ContextedException createOpenContextedException(final String message) {
+        return new ContextedException(message)
+                .addContextValue("className", getClass().getName())
+                .addContextValue("currentState", state.get().name());
     }
 
     /**

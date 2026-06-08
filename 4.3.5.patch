@@ -1,0 +1,200 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..bc22b9a26 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -20,9 +20,18 @@
+ import java.beans.PropertyChangeSupport;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
++import org.apache.commons.lang3.exception.ContextedException;
++
+ /**
+  * Base class for circuit breakers.
+  *
++ * <p>
++ * This class provides common state management logic shared by all circuit breaker
++ * implementations, including the state variable, {@link #isOpen()}, {@link #isClosed()},
++ * and a default {@link #checkState()} implementation. Subclasses can override
++ * {@link #checkState()} if they need more complex state checking logic.
++ * </p>
++ *
+  * @param <T> the type of the value monitored by this circuit breaker
+  * @since 3.5
+  */
+@@ -121,9 +130,18 @@ protected void changeState(final State newState) {
+ 
+     /**
+      * {@inheritDoc}
++     *
++     * <p>
++     * This default implementation returns the negation of {@link #isOpen()}, meaning
++     * the circuit breaker is considered closed (and thus operational) when it is not
++     * in the open state. Subclasses may override this method to provide more complex
++     * state checking logic (e.g., time-based automatic recovery).
++     * </p>
+      */
+     @Override
+-    public abstract boolean checkState();
++    public boolean checkState() {
++        return !isOpen();
++    }
+ 
+     /**
+      * {@inheritDoc}
+@@ -133,6 +151,21 @@ public void close() {
+         changeState(State.CLOSED);
+     }
+ 
++    /**
++     * Creates a {@link ContextedException} carrying context information about the
++     * circuit breaker at the moment it transitions to the open state. Subclasses
++     * may override this method to add additional context values specific to their
++     * monitoring logic.
++     *
++     * @param message the detail message for the exception
++     * @return a new {@link ContextedException} with circuit breaker context
++     */
++    protected ContextedException createOpenContextedException(final String message) {
++        return new ContextedException(message)
++                .addContextValue("className", getClass().getName())
++                .addContextValue("currentState", state.get().name());
++    }
++
+     /**
+      * {@inheritDoc}
+      */
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..172c55b7b 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -18,6 +18,8 @@
+ 
+ import java.util.concurrent.atomic.AtomicLong;
+ 
++import org.apache.commons.lang3.exception.ContextedException;
++
+ /**
+  * A simple implementation of the <a
+  * href="https://martinfowler.com/bliki/CircuitBreaker.html">Circuit Breaker</a> pattern
+@@ -79,21 +81,28 @@ public ThresholdCircuitBreaker(final long threshold) {
+ 
+     /**
+      * {@inheritDoc}
++     *
++     * <p>Resets the internal counter back to its initial value (zero).</p>
+      */
+     @Override
+-    public boolean checkState() {
+-        return !isOpen();
++    public void close() {
++        super.close();
++        this.used.set(INITIAL_COUNT);
+     }
+ 
+     /**
+-     * {@inheritDoc}
++     * Creates a {@link ContextedException} with additional context specific to this
++     * threshold-based circuit breaker, including the threshold value and the current
++     * usage amount.
+      *
+-     * <p>Resets the internal counter back to its initial value (zero).</p>
++     * @param message the detail message for the exception
++     * @return a new {@link ContextedException} with threshold-specific context
+      */
+     @Override
+-    public void close() {
+-        super.close();
+-        this.used.set(INITIAL_COUNT);
++    protected ContextedException createOpenContextedException(final String message) {
++        return super.createOpenContextedException(message)
++                .addContextValue("threshold", threshold)
++                .addContextValue("used", used.get());
+     }
+ 
+     /**
+@@ -109,16 +118,25 @@ public long getThreshold() {
+      * {@inheritDoc}
+      *
+      * <p>If the threshold is zero, the circuit breaker will be in a permanent <em>open</em> state.</p>
++     *
++     * <p>When the threshold is exceeded, this method transitions the circuit breaker to the
++     * open state and throws a {@link CircuitBreakingException} wrapping a
++     * {@link ContextedException} that carries context information about the circuit
++     * breaker state at the moment of the transition.</p>
+      */
+     @Override
+     public boolean incrementAndCheckState(final Long increment) {
+         if (threshold == 0) {
+             open();
++            throw new CircuitBreakingException(
++                    createOpenContextedException("Threshold is zero, circuit breaker is permanently open"));
+         }
+ 
+         final long used = this.used.addAndGet(increment);
+         if (used > threshold) {
+             open();
++            throw new CircuitBreakingException(
++                    createOpenContextedException("Threshold exceeded: " + used + " > " + threshold));
+         }
+ 
+         return checkState();
+diff --git a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+index 7159f2816..6151bf179 100644
+--- a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
++++ b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+@@ -17,10 +17,11 @@
+ package org.apache.commons.lang3.concurrent;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
+-import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertThrows;
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+ 
+ import org.apache.commons.lang3.AbstractLangTest;
++import org.apache.commons.lang3.exception.ContextedException;
+ import org.junit.jupiter.api.Test;
+ 
+ /**
+@@ -67,22 +68,38 @@ void testThreshold() {
+     }
+ 
+     /**
+-     * Tests that exceeding the threshold raises an exception.
++     * Tests that exceeding the threshold raises a {@link CircuitBreakingException}
++     * wrapping a {@link ContextedException} with context information.
+      */
+     @Test
+     void testThresholdCircuitBreakingException() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+-        assertFalse(circuit.incrementAndCheckState(2L), "The circuit was supposed to be open after increment above the threshold");
++        final CircuitBreakingException ex = assertThrows(CircuitBreakingException.class,
++                () -> circuit.incrementAndCheckState(2L),
++                "Expected CircuitBreakingException when threshold exceeded");
++        assertTrue(ex.getCause() instanceof ContextedException,
++                "Cause should be ContextedException");
++        final ContextedException ce = (ContextedException) ex.getCause();
++        assertTrue(ce.getMessage().contains("Threshold exceeded"),
++                "Message should contain 'Threshold exceeded'");
+     }
+ 
+     /**
+-     * Test that when threshold is zero, the circuit breaker is always open.
++     * Test that when threshold is zero, the circuit breaker is always open
++     * and throws a {@link CircuitBreakingException}.
+      */
+     @Test
+     void testThresholdEqualsZero() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
+-        assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
++        final CircuitBreakingException ex = assertThrows(CircuitBreakingException.class,
++                () -> circuit.incrementAndCheckState(0L),
++                "When the threshold is zero, the circuit should throw CircuitBreakingException");
++        assertTrue(ex.getCause() instanceof ContextedException,
++                "Cause should be ContextedException");
++        final ContextedException ce = (ContextedException) ex.getCause();
++        assertTrue(ce.getMessage().contains("Threshold is zero"),
++                "Message should contain 'Threshold is zero'");
+     }
+ 
+ }

@@ -18,6 +18,8 @@ package org.apache.commons.lang3.concurrent;
 
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.commons.lang3.exception.ContextedException;
+
 /**
  * A simple implementation of the <a
  * href="https://martinfowler.com/bliki/CircuitBreaker.html">Circuit Breaker</a> pattern
@@ -79,14 +81,6 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
 
     /**
      * {@inheritDoc}
-     */
-    @Override
-    public boolean checkState() {
-        return !isOpen();
-    }
-
-    /**
-     * {@inheritDoc}
      *
      * <p>Resets the internal counter back to its initial value (zero).</p>
      */
@@ -94,6 +88,21 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
     public void close() {
         super.close();
         this.used.set(INITIAL_COUNT);
+    }
+
+    /**
+     * Creates a {@link ContextedException} with additional context specific to this
+     * threshold-based circuit breaker, including the threshold value and the current
+     * usage amount.
+     *
+     * @param message the detail message for the exception
+     * @return a new {@link ContextedException} with threshold-specific context
+     */
+    @Override
+    protected ContextedException createOpenContextedException(final String message) {
+        return super.createOpenContextedException(message)
+                .addContextValue("threshold", threshold)
+                .addContextValue("used", used.get());
     }
 
     /**
@@ -109,16 +118,25 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
      * {@inheritDoc}
      *
      * <p>If the threshold is zero, the circuit breaker will be in a permanent <em>open</em> state.</p>
+     *
+     * <p>When the threshold is exceeded, this method transitions the circuit breaker to the
+     * open state and throws a {@link CircuitBreakingException} wrapping a
+     * {@link ContextedException} that carries context information about the circuit
+     * breaker state at the moment of the transition.</p>
      */
     @Override
     public boolean incrementAndCheckState(final Long increment) {
         if (threshold == 0) {
             open();
+            throw new CircuitBreakingException(
+                    createOpenContextedException("Threshold is zero, circuit breaker is permanently open"));
         }
 
         final long used = this.used.addAndGet(increment);
         if (used > threshold) {
             open();
+            throw new CircuitBreakingException(
+                    createOpenContextedException("Threshold exceeded: " + used + " > " + threshold));
         }
 
         return checkState();
