@@ -16,6 +16,9 @@
  */
 package org.apache.commons.lang3.arch;
 
+import org.apache.commons.lang3.concurrent.RetryPolicy;
+import org.apache.commons.lang3.function.FailableFunction;
+
 /**
  * Represents a microprocessor and defines some properties like architecture and type.
  *
@@ -241,6 +244,28 @@ public class Processor {
      */
     public boolean isX86() {
         return Type.X86 == type;
+    }
+
+    /**
+     * Process the given function with retry support.
+     * <p>
+     * When the function throws an exception, it will be retried up to {@code maxRetries} times.
+     * If the function still fails after all retries, a {@link org.apache.commons.lang3.exception.ContextedException}
+     * is thrown wrapping the last caught exception.
+     * </p>
+     *
+     * @param <T> the type of the input to the function.
+     * @param <R> the type of the result of the function.
+     * @param <E> the type of exception thrown by the function.
+     * @param function the function to execute with retry.
+     * @param input the input to the function.
+     * @param maxRetries the maximum number of retry attempts, must be &gt;= 0.
+     * @return the result of the function.
+     * @throws org.apache.commons.lang3.exception.ContextedException if the function fails after all retries.
+     * @since 3.21.0
+     */
+    public static <T, R, E extends Exception> R processWithRetry(final FailableFunction<T, R, E> function, final T input, final int maxRetries) {
+        return RetryPolicy.processWithRetry(function, input, maxRetries);
     }
 
     @Override
