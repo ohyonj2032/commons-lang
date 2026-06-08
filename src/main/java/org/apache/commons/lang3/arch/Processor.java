@@ -16,6 +16,9 @@
  */
 package org.apache.commons.lang3.arch;
 
+import org.apache.commons.lang3.exception.ContextedException;
+import org.apache.commons.lang3.function.FailableFunction;
+
 /**
  * Represents a microprocessor and defines some properties like architecture and type.
  *
@@ -248,6 +251,66 @@ public class Processor {
         final StringBuilder builder = new StringBuilder();
         builder.append(type.getLabel()).append(' ').append(arch.getLabel());
         return builder.toString();
+    }
+
+    /**
+     * Executes the given function with retry logic.
+     * <p>
+     * If the function throws an exception, it will be retried up to {@code maxRetries} times.
+     * If all retries fail, a {@link ContextedException} is thrown containing the last exception
+     * and retry context information.
+     * </p>
+     *
+     * @param <T> the type of the input to the function
+     * @param <R> the type of the result of the function
+     * @param <E> the type of thrown exception or error
+     * @param function the function to execute
+     * @param maxRetries the maximum number of retry attempts
+     * @return the result of the successful function execution
+     * @throws ContextedException if all retry attempts fail
+     * @since 3.21.0
+     */
+    public <T, R, E extends Throwable> R processWithRetry(final FailableFunction<T, R, E> function, final int maxRetries) throws ContextedException {
+        return processWithRetry(null, function, maxRetries);
+    }
+
+    /**
+     * Executes the given function with retry logic.
+     * <p>
+     * If the function throws an exception, it will be retried up to {@code maxRetries} times.
+     * If all retries fail, a {@link ContextedException} is thrown containing the last exception
+     * and retry context information.
+     * </p>
+     *
+     * @param <T> the type of the input to the function
+     * @param <R> the type of the result of the function
+     * @param <E> the type of thrown exception or error
+     * @param input the input to pass to the function
+     * @param function the function to execute
+     * @param maxRetries the maximum number of retry attempts
+     * @return the result of the successful function execution
+     * @throws ContextedException if all retry attempts fail
+     * @since 3.21.0
+     */
+    public <T, R, E extends Throwable> R processWithRetry(final T input, final FailableFunction<T, R, E> function, final int maxRetries) throws ContextedException {
+        if (maxRetries < 0) {
+            throw new IllegalArgumentException("maxRetries must be non-negative");
+        }
+
+        Exception lastException = null;
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                return function.apply(input);
+            } catch (final Throwable e) {
+                lastException = e instanceof Exception ? (Exception) e : new Exception(e);
+            }
+        }
+
+        throw new ContextedException(
+                "Failed after " + (maxRetries + 1) + " attempts",
+                lastException
+        ).addContextValue("Processor", this.toString())
+         .addContextValue("MaxRetries", maxRetries);
     }
 
 }
