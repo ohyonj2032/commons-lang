@@ -83,11 +83,13 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
         return state == State.OPEN;
     }
 
-    /** The current state of this circuit breaker. */
+    /**
+     * The current state of this circuit breaker.
+     */
     protected final AtomicReference<State> state = new AtomicReference<>(State.CLOSED);
 
     /** An object for managing change listeners registered at this instance. */
-    private final PropertyChangeSupport changeSupport;
+    protected final PropertyChangeSupport changeSupport;
 
     /**
      * Creates an {@link AbstractCircuitBreaker}. It also creates an internal {@link PropertyChangeSupport}.
