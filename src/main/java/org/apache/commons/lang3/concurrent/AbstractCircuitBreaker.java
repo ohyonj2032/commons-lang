@@ -20,6 +20,9 @@ import java.beans.PropertyChangeListener;
 import java.beans.PropertyChangeSupport;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.commons.lang3.exception.ContextedException;
+import org.apache.commons.lang3.exception.ExceptionUtils;
+
 /**
  * Base class for circuit breakers.
  *
@@ -123,7 +126,15 @@ public abstract class AbstractCircuitBreaker<T> implements CircuitBreaker<T> {
      * {@inheritDoc}
      */
     @Override
-    public abstract boolean checkState();
+    public boolean checkState() {
+        if (isOpen()) {
+            throw ExceptionUtils.asRuntimeException(
+                new ContextedException("Circuit breaker is open")
+                    .addContextValue("state", state.get())
+            );
+        }
+        return true;
+    }
 
     /**
      * {@inheritDoc}

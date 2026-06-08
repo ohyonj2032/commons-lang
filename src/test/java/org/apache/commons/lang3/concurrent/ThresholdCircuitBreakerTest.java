@@ -18,9 +18,11 @@ package org.apache.commons.lang3.concurrent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.apache.commons.lang3.AbstractLangTest;
+import org.apache.commons.lang3.exception.ContextedException;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -73,7 +75,11 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
     void testThresholdCircuitBreakingException() {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
         circuit.incrementAndCheckState(9L);
-        assertFalse(circuit.incrementAndCheckState(2L), "The circuit was supposed to be open after increment above the threshold");
+        assertThrows(
+            ContextedException.class,
+            () -> circuit.incrementAndCheckState(2L),
+            "The circuit was supposed to be open after increment above the threshold"
+        );
     }
 
     /**
@@ -82,7 +88,11 @@ class ThresholdCircuitBreakerTest extends AbstractLangTest {
     @Test
     void testThresholdEqualsZero() {
         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
-        assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
+        assertThrows(
+            ContextedException.class,
+            () -> circuit.incrementAndCheckState(0L),
+            "When the threshold is zero, the circuit is supposed to be always open"
+        );
     }
 
 }

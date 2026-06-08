@@ -1,0 +1,91 @@
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+index 20891c0ff..fdbe67b25 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/AbstractCircuitBreaker.java
+@@ -20,6 +20,9 @@
+ import java.beans.PropertyChangeSupport;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
++import org.apache.commons.lang3.exception.ContextedException;
++import org.apache.commons.lang3.exception.ExceptionUtils;
++
+ /**
+  * Base class for circuit breakers.
+  *
+@@ -123,7 +126,15 @@ protected void changeState(final State newState) {
+      * {@inheritDoc}
+      */
+     @Override
+-    public abstract boolean checkState();
++    public boolean checkState() {
++        if (isOpen()) {
++            throw ExceptionUtils.asRuntimeException(
++                new ContextedException("Circuit breaker is open")
++                    .addContextValue("state", state.get())
++            );
++        }
++        return true;
++    }
+ 
+     /**
+      * {@inheritDoc}
+diff --git a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+index 6b7d8719c..9e9351375 100644
+--- a/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
++++ b/src/main/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreaker.java
+@@ -77,13 +77,6 @@ public ThresholdCircuitBreaker(final long threshold) {
+         this.threshold = threshold;
+     }
+ 
+-    /**
+-     * {@inheritDoc}
+-     */
+-    @Override
+-    public boolean checkState() {
+-        return !isOpen();
+-    }
+ 
+     /**
+      * {@inheritDoc}
+diff --git a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+index 7159f2816..f72dcd0e8 100644
+--- a/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
++++ b/src/test/java/org/apache/commons/lang3/concurrent/ThresholdCircuitBreakerTest.java
+@@ -18,9 +18,11 @@
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
+ import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertThrows;
+ import static org.junit.jupiter.api.Assertions.assertTrue;
+ 
+ import org.apache.commons.lang3.AbstractLangTest;
++import org.apache.commons.lang3.exception.ContextedException;
+ import org.junit.jupiter.api.Test;
+ 
+ /**
+@@ -73,7 +75,11 @@ void testThreshold() {
+     void testThresholdCircuitBreakingException() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(threshold);
+         circuit.incrementAndCheckState(9L);
+-        assertFalse(circuit.incrementAndCheckState(2L), "The circuit was supposed to be open after increment above the threshold");
++        assertThrows(
++            ContextedException.class,
++            () -> circuit.incrementAndCheckState(2L),
++            "The circuit was supposed to be open after increment above the threshold"
++        );
+     }
+ 
+     /**
+@@ -82,7 +88,11 @@ void testThresholdCircuitBreakingException() {
+     @Test
+     void testThresholdEqualsZero() {
+         final ThresholdCircuitBreaker circuit = new ThresholdCircuitBreaker(zeroThreshold);
+-        assertFalse(circuit.incrementAndCheckState(0L), "When the threshold is zero, the circuit is supposed to be always open");
++        assertThrows(
++            ContextedException.class,
++            () -> circuit.incrementAndCheckState(0L),
++            "When the threshold is zero, the circuit is supposed to be always open"
++        );
+     }
+ 
+ }

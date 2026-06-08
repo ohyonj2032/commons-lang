@@ -77,13 +77,6 @@ public class ThresholdCircuitBreaker extends AbstractCircuitBreaker<Long> {
         this.threshold = threshold;
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public boolean checkState() {
-        return !isOpen();
-    }
 
     /**
      * {@inheritDoc}
